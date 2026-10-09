@@ -7,11 +7,11 @@ class Bars:
 
     def __init__(self, console: Console | None = None, enabled: bool = True) -> None:
         self.progress = Progress(
-            TextColumn("{task.description:<28}"), BarColumn(), TaskProgressColumn(), TimeElapsedColumn(),
+            TextColumn("{task.description:<28}"), BarColumn(), TaskProgressColumn(), TimeElapsedColumn(), TextColumn("{task.fields[detail]}"),
             console=console, disable=not enabled,
         )
-        self.overall: TaskID = self.progress.add_task("all repositories", total=0)
-        self.current: TaskID = self.progress.add_task("-", total=0, visible=False)
+        self.overall: TaskID = self.progress.add_task("all repositories", total=0, detail="")
+        self.current: TaskID = self.progress.add_task("-", total=0, visible=False, detail="")
         self.done = 0
     # end def
 
@@ -30,7 +30,7 @@ class Bars:
 
     def start_repo(self, name: str, steps: int) -> None:
         self.done = 0
-        self.progress.reset(self.current, total=steps, description=name, visible=True)
+        self.progress.reset(self.current, total=steps, description=name, visible=True, detail="")
     # end def
 
     def add_work(self, count: int) -> None:
@@ -40,12 +40,12 @@ class Bars:
 
     def work_done(self, count: int = 1) -> None:
         self.done += count
-        self.progress.update(self.current, completed=self.done)
+        self.progress.update(self.current, completed=self.done, detail="")
     # end def
 
-    def step_progress(self, fraction: float) -> None:
+    def step_progress(self, fraction: float, detail: str = "") -> None:
         """Partial progress (0..1) of the step in flight, e.g. a running `git fetch`."""
-        self.progress.update(self.current, completed=self.done + min(max(fraction, 0.0), 0.99))
+        self.progress.update(self.current, completed=self.done + min(max(fraction, 0.0), 0.99), detail=detail)
     # end def
 
     def finish_repo(self) -> None:

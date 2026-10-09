@@ -96,7 +96,7 @@ async def write_batch(path: Path, batch: list[tuple[str, str]], result: BackupRe
 # end def
 
 
-async def backup_refs(path: Path, now: datetime, on_progress: Callable[[float], None] | None = None) -> BackupResult:
+async def backup_refs(path: Path, now: datetime, on_progress: Callable[[float, str], None] | None = None) -> BackupResult:
     """Create `bak/*` branches for every new or changed branch/tag tip, so force pushes stay recoverable.
 
     A tip counts as new if there's no backup for that exact `(kind, name, commit)` yet, which makes reruns idempotent.
@@ -118,7 +118,8 @@ async def backup_refs(path: Path, now: datetime, on_progress: Callable[[float], 
     for start in range(0, len(pending), BATCH_SIZE):
         await write_batch(path, pending[start:start + BATCH_SIZE], result)
         if on_progress is not None:
-            on_progress(min(start + BATCH_SIZE, len(pending)) / len(pending))
+            written = min(start + BATCH_SIZE, len(pending))
+            on_progress(written / len(pending), f"Creating backup refs {written}/{len(pending)}")
         # end if
     # end for
     return result

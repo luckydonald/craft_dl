@@ -2,19 +2,49 @@ import asyncio
 import logging
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-ProgressCallback = Callable[[float], None]
-PERCENT = re.compile(r"^(?:remote: )?(Counting objects|Compressing objects|Receiving objects|Resolving deltas):\s+(\d+)%")
-# Share of the whole transfer each git phase stands for, so one monotonic fraction can drive a bar.
+ProgressCallback = Callable[[float, str], None]
+PROGRESS = re.compile(
+    r"^(?:remote: )?(?P<phase>Enumerating objects|Counting objects|Compressing objects|Receiving objects|Resolving deltas|Updating files|Checking out files)"
+    r":\s+(?:(?P<percent>\d+)% \((?P<done>\d+)/(?P<total>\d+)\)|(?P<count>\d+))(?P<tail>.*)$",
+)
+RATE = re.compile(r"(\d+(?:\.\d+)? \w+/s)")
+# Share of the whole run each git phase stands for, so one monotonic fraction can drive a bar (a fetch ends after resolving deltas).
 PHASES: dict[str, tuple[float, float]] = {
+    "Enumerating objects": (0.0, 0.0),
     "Counting objects": (0.0, 0.05),
     "Compressing objects": (0.05, 0.1),
-    "Receiving objects": (0.1, 0.8),
-    "Resolving deltas": (0.8, 1.0),
+    "Receiving objects": (0.1, 0.7),
+    "Resolving deltas": (0.7, 0.9),
+    "Updating files": (0.9, 1.0),
+    "Checking out files": (0.9, 1.0),
 }
+
+
+@dataclass(frozen=True)
+class GitProgress:
+    phase: str
+    percent: int | None
+    done: int
+    total: int | None
+    rate: str | None
+
+    @property
+    def fraction(self) -> float:
+        start, end = PHASES[self.phase]
+        return start + (end - start) * (self.percent or 0) / 100
+    # end def
+
+    @property
+    def detail(self) -> str:
+        counts = f"{self.done}/{self.total}" if self.total is not None else str(self.done)
+        return f"{self.phase} {counts}" + (f" · {self.rate}" if self.rate else "")
+    # end def
+# end class
 
 
 class GitError(Exception):
@@ -26,14 +56,19 @@ class GitError(Exception):
 # end class
 
 
-def fraction_of(line: str) -> float | None:
-    """Overall progress (0..1) from a git progress line such as `Receiving objects:  45% (9/20)`."""
-    found = PERCENT.match(line.strip())
+def parse_progress(line: str) -> GitProgress | None:
+    """`Receiving objects:  45% (390/866), 1.20 MiB | 3.92 MiB/s` -> phase, percent, counts and rate."""
+    found = PROGRESS.match(line.strip())
     if found is None:
         return None
     # end if
-    start, end = PHASES[found.group(1)]
-    return start + (end - start) * int(found.group(2)) / 100
+    rate = RATE.search(found.group("tail"))
+    if found.group("percent") is None:
+        return GitProgress(found.group("phase"), None, int(found.group("count")), None, None)
+    # end if
+    return GitProgress(
+        found.group("phase"), int(found.group("percent")), int(found.group("done")), int(found.group("total")), rate.group(1) if rate else None,
+    )
 # end def
 
 
@@ -49,10 +84,10 @@ async def read_stderr(stream: asyncio.StreamReader, label: str, on_progress: Pro
         if not segment:
             return
         # end if
-        fraction = fraction_of(segment)
-        if fraction is not None and on_progress is not None:
-            best = max(best, fraction)
-            on_progress(best)
+        progress = parse_progress(segment)
+        if progress is not None and on_progress is not None:
+            best = max(best, progress.fraction)
+            on_progress(best, progress.detail)
         # end if
         if final:
             logger.info("%s: %s", label, segment)
@@ -125,7 +160,7 @@ async def init_and_fetch(url: str, path: Path, on_progress: ProgressCallback | N
     await run_git("remote", "set-head", "origin", "--auto", cwd=path)
     head = (await run_git("symbolic-ref", "--short", "refs/remotes/origin/HEAD", cwd=path, quiet=True)).strip()
     branch = head.removeprefix("origin/")
-    await run_git("checkout", "-B", branch, head, cwd=path)
+    await run_git("checkout", "--progress", "-B", branch, head, cwd=path, on_progress=on_progress)
 # end def
 
 

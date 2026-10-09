@@ -187,3 +187,8 @@ We already get the HTTP Request logs via httpx or whatever. But like announce st
 [10/09/26 19:00:29] INFO     filmcraft: created 31 backup ref(s)
 </pasted_content id="b3c5">
 
+❯ Like the checkout/pull already has like known progress elements, i.e. the files and indexies and whatnot pulled XXX/YYY, which can be parsed.
+Possibly there's a porcelan mode or flag to get better progress, too.
+
+❯ Plan accepted, auto mode.
+

@@ -50,3 +50,12 @@ async def test_batch_failure_falls_back_to_single_refs(tmp_path: Path, remote: P
     assert result.created == 1
     assert len(result.errors) == 1
     assert (await git_ops.run_git("rev-parse", "refs/heads/bak/ok/1", cwd=checkout)).strip() == head
+
+
+async def test_progress_callback_gets_counts(tmp_path: Path, remote: Path) -> None:
+    checkout = tmp_path / "checkout"
+    await git_ops.clone(str(remote), checkout)
+    seen: list[tuple[float, str]] = []
+    await backup_refs(checkout, NOW, lambda fraction, detail: seen.append((fraction, detail)))
+    assert seen and seen[-1][0] == 1.0
+    assert seen[-1][1].startswith("Creating backup refs ") and "/" in seen[-1][1]
