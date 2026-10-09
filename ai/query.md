@@ -67,3 +67,90 @@
 
 ❯ [/code-style](./skills/code-style/SKILL.md)
 
+❯ /plan Allow filtering the file downloads to a specific platform, i.e. `--platform=win` (aka. windows), `--platform=apple`, (aka. `=mac`, `=macos`), etc. and including variants, too, e.g. `win-portable` `mac-universal`, `win-x64`, `win-setup`, `win-x64-setup`, etc. The same can also be written as `--platform=win --variant=x64`.
+Allow chains of those to specify it per app, e.g.:
+1. `--app=art --release=v0.41.0,latest --platform=win --variant=msi --platform=mac --app=photo --release=v0.5.0 --variant=dmg,flatpack,aarch64`
+   - which would download:
+     1. https://github.com/storytold/artcraft/releases/download/artcraft-v0.41.0/ArtCraft_0.41.0_x64_en-US.msi
+     2.  https://github.com/storytold/artcraft/releases/download/artcraft-v0.41.0/ArtCraft_0.41.0_universal.dmg
+     3. https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-linux-aarch64.AppImage
+     4. https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-linux-aarch64.AppImage.zsync
+     5. https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-linux-aarch64.deb
+     6. https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-linux-aarch64.flatpak
+     7. https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-linux-aarch64.rpm
+     8. https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-linux-aarch64.tar.gz
+     9. https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-linux-x86_64.flatpak
+     10. https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-macos-universal.dmg
+     11. https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-cli-0.5.0-macos-universal.zip
+   - but not:
+     - https://github.com/storytold/artcraft/releases/download/artcraft-v0.41.0/ArtCraft_0.41.0_x64-setup.exe
+     - https://github.com/storytold/artcraft/releases/download/artcraft-v0.41.0/ArtCraft_universal.app.tar.gz
+     - https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-freebsd-x86_64.tar.gz
+     - https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-linux-x86_64.AppImage
+     - https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-linux-x86_64.AppImage.zsync
+     - https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-linux-x86_64.deb
+     - https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-linux-x86_64.rpm
+     - https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-linux-x86_64.tar.gz
+     - https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-windows-arm64-portable.zip
+     - https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-windows-arm64.msi
+     - https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-windows-x64-portable.zip
+     - https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-windows-x64.msi
+     - https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-windows-x86-portable.zip
+     - https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-windows-x86.msi
+     - https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-web-0.5.0.zip
+   - regardless it would write `README.md` and download `SHA256SUMS.txt`.
+   - at time of writing, this `latest` in `artcraft` is the same as `v0.41.0`, hence no additional files.
+
+❯ Question answered.
+> <details><summary>
+>
+>> 1. In your example the `photo` group has no `--platform`, yet #11 (`photocraft-cli-…-macos-universal.zip`) matches none of `dmg,flatpak,aarch64`. How should that happen?
+>> 2. `ArtCraft_universal.app.tar.gz` is mac but excluded in your example, while `ArtCraft_0.41.0_universal.dmg` is included for plain `--platform=mac`. What rule?
+>> 3. `--variant=aarch64` in your example matches the Linux aarch64 files but not `windows-arm64`. Treat `aarch64` and `arm64` as aliases?
+>
+> (click to expand)
+>
+> </summary>
+>
+>> **Scoping** (1/3) <kbd>Single Select</kbd><br>
+>> In your example the `photo` group has no `--platform`, yet #11 (`photocraft-cli-…-macos-universal.zip`) matches none of `dmg,flatpak,aarch64`. How should that happen?
+> - [ ] 1\. Platform carries over (Recommended)
+>   - _A group without --platform inherits the previous group's last --platform (mac). Selection = that platform (all its files) plus each --variant as a standalone filter over all files. Reproduces your list exactly, except for the app.tar.gz question below._
+> - [ ] 2\. Bare variants only
+>   - _No inheritance: photo gets only dmg/flatpak/aarch64 matches, so the cli zip (#11) would NOT be downloaded._
+> - [ ] 3\. Variants narrow the platform
+>   - _Variants always AND-combine with the platform in the same group; then photo with no platform matches variants only and #11 is again missing._
+> - [x] 4\. _Type something:_
+>   - > Yes, you are correct. I misstook that with the `dmg` filter. My bad, the example is wrong.
+The idea is it's grouped by the scope getting more narrow: `app > release > platform > variant`.
+So if a new `--platform` appears, it keeps "higher" filters, `app` and `release`, but resets "lower" filters, `platform` and `variant`.
+>
+>> **App bundle** (2/3) <kbd>Single Select</kbd><br>
+>> `ArtCraft_universal.app.tar.gz` is mac but excluded in your example, while `ArtCraft_0.41.0_universal.dmg` is included for plain `--platform=mac`. What rule?
+> - [ ] 1\. Updater bundles excluded by default (Recommended)
+>   - _`*.app.tar.gz` (Tauri updater artifact) and `.zsync` sidecars are only fetched when asked for via an explicit --variant (e.g. `--variant=app.tar.gz`); but `.AppImage.zsync` still comes along when AppImage is selected, as in your #4._
+> - [ ] 2\. Variant msi applies to all platforms of that group
+>   - _Contradicts the dmg being included, so not viable; listed only for completeness._
+> - [ ] 3\. Platform without variant = installers only
+>   - _Define a per-platform installer set (dmg, msi, exe, deb, rpm, AppImage, flatpak, …) used when no variant is given._
+> - [x] 4\. _Type something:_
+>   - > You are correct, `ArtCraft_universal.app.tar.gz` shall match `platform=apple`, too.
+>
+>> **Arch alias** (3/3) <kbd>Single Select</kbd><br>
+>> `--variant=aarch64` in your example matches the Linux aarch64 files but not `windows-arm64`. Treat `aarch64` and `arm64` as aliases?
+> - [ ] 1\. No, literal tokens (Recommended)
+>   - _Matches your expected list. `arm64` and `aarch64` are separate variants; you can pass both (`--variant=aarch64,arm64`)._
+> - [ ] 2\. Yes, aliases
+>   - _aarch64 also selects windows-arm64 and mac arm64 files, which differs from your example._
+> - [x] 3\. _Type something:_
+>   - > Touch one. For now `aarch` seem linux specific naming. But if it's the same technology, it might make sense.
+But if we do that, `m1`, `m2`, … and `apple-chip` and what not would be synonymous, too?
+And technically that would also need to imply `universal` ones? And how would be the intel-mac variant be? `x64`?
+Oh, if you got mac and the `universal` matching (or not being specifed) also download the CLI I guess, https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-cli-0.5.0-macos-universal.zip
+Toggle with `--dl-cli=both/true/yes/ja/j/y/1|app/false/no/nein/n/0|cli-only/only/cli/nur/o/-1`, defaulting to `both`, if unset. Explect `-cli-` to be contained for that.
+>
+> </details>
+>
+
+❯ Obviously add unittest matrixes for the current released version names as like a test with if any file would match one of those possible flags
+
