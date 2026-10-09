@@ -20,7 +20,7 @@ class CliMode(StrEnum):
 
 
 CLI_SPELLINGS: dict[str, CliMode] = {
-    **dict.fromkeys(("both", "true", "yes", "ja", "j", "y", "1"), CliMode.both),
+    **dict.fromkeys(("both", "*", "all", "true", "yes", "ja", "j", "y", "1"), CliMode.both),
     **dict.fromkeys(("app", "false", "no", "nein", "n", "0"), CliMode.app),
     **dict.fromkeys(("cli-only", "only", "cli", "nur", "o", "-1"), CliMode.cli_only),
 }

@@ -81,3 +81,13 @@ def test_selector_args_round_trip() -> None:
         "--app=artcraft", "--release=v0.41.0,latest", "--platform=mac",
     ]
     assert parse_chain(args) == [Selector(("artcraft",), s.releases, s.platforms, s.variants) for s in selectors]
+
+
+def test_wildcards_lift_the_restriction_of_their_level() -> None:
+    assert parse_chain("--app=a --release=1 --platform=win --variant=msi --platform=*".split()) == [
+        Selector(("a",), ("1",), ("windows",), ("msi",)),
+        Selector(("a",), ("1",), (), ()),
+    ]
+    assert parse_chain("--app=a --release=1 --release=* --variant=x".split())[-1] == Selector(("a",), (), (), ("x",))
+    assert parse_chain("--app=a --platform=win --variant=msi --variant=ALL".split())[-1] == Selector(("a",), (), ("windows",), ())
+    assert parse_chain("--app=a --platform=win,all".split()) == [Selector(("a",), (), (), ())]

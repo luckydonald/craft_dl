@@ -48,6 +48,7 @@ ARCH_ALIASES: dict[str, str] = {
     "arm64": "arm64",
     "aarch64": "arm64",
     "armv8": "arm64",
+    "silicon": "arm64",
     "x64": "x64",
     "amd64": "x64",
     "intel": "x64",

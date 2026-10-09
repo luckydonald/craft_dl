@@ -2,9 +2,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from craft_dl.assets import split_platform
-from craft_dl.selection import ALL_DEFAULT, split_values
+from craft_dl.selection import ALL_DEFAULT, is_wildcard, split_values
 
 APP, RELEASE, PLATFORM, VARIANT = range(4)
+WILDCARD = "*"
 OPTIONS = {"--app": APP, "--release": RELEASE, "--platform": PLATFORM, "--variant": VARIANT}
 
 
@@ -50,12 +51,12 @@ class Builder:
         # end if
     # end def
 
-    def apply(self, level: int, values: Sequence[str]) -> None:
+    def apply(self, level: int, values: Sequence[str], wildcard: bool = False) -> None:
         """Repeating a level extends it, unless a lower level is already set: then that group is finished and a new one starts.
 
-        A second `--platform` always starts a new group, since it resets the variants.
+        A second `--platform` always starts a new group, since it resets the variants. A wildcard (`*`, `all`) lifts the restriction of its level.
         """
-        starts_new = self.deeper_set(level) or (level == PLATFORM and bool(self.levels[PLATFORM]))
+        starts_new = self.deeper_set(level) or (level == PLATFORM or wildcard) and bool(self.levels[level])
         if starts_new:
             self.flush()
             self.levels[level] = []
@@ -63,7 +64,7 @@ class Builder:
                 self.levels[deeper] = []
             # end for
         # end if
-        for value in values:
+        for value in () if wildcard else values:
             if value not in self.levels[level]:
                 self.levels[level].append(value)
             # end if
@@ -100,6 +101,9 @@ def expand_platforms(values: Sequence[str]) -> list[tuple[int, list[str]]]:
     operations: list[tuple[int, list[str]]] = []
     plain: list[str] = []
     for value in values:
+        if is_wildcard(value):
+            return [(PLATFORM, [WILDCARD])]
+        # end if
         try:
             platform, variant = split_platform(value)
         except ValueError as error:
@@ -129,7 +133,8 @@ def parse_chain(tokens: Sequence[str]) -> list[Selector]:
     for level, values in option_values(tokens):
         operations = expand_platforms(values) if level == PLATFORM else [(level, [value.lower() for value in values] if level != APP else values)]
         for operation_level, operation_values in operations:
-            builder.apply(operation_level, operation_values)
+            wildcard = operation_level != APP and any(is_wildcard(value) for value in operation_values)
+            builder.apply(operation_level, operation_values, wildcard)
         # end for
     # end for
     builder.flush()

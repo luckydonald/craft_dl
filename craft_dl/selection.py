@@ -4,6 +4,8 @@ from collections.abc import Iterable, Sequence
 DEFAULT_PATTERN = re.compile(r"^[a-z0-9]+craft$", re.IGNORECASE)
 ALL_DEFAULT = "*"
 ALL_REPOS = "**"
+ALL_ORG = "@storytold"
+WILDCARDS = frozenset({"*", "all"})
 SUFFIX = "craft"
 
 
@@ -19,6 +21,12 @@ def split_values(values: Sequence[str]) -> list[str]:
         # end for
     # end for
     return result
+# end def
+
+
+def is_wildcard(value: str) -> bool:
+    """`*` and `all` mean "everything" / "unfiltered" for every option."""
+    return value.strip().lower() in WILDCARDS
 # end def
 
 
@@ -48,13 +56,13 @@ def resolve_apps(apps: Sequence[str], available: Iterable[str]) -> tuple[list[st
     # end def
 
     for app in apps or [ALL_DEFAULT]:
-        if app == ALL_REPOS:
+        if app in (ALL_REPOS, ALL_ORG):
             for name in names:
                 add(name)
             # end for
             continue
         # end if
-        if app == ALL_DEFAULT:
+        if is_wildcard(app):
             for name in names:
                 if DEFAULT_PATTERN.match(name):
                     add(name)

@@ -15,7 +15,7 @@ from craft_dl.github import GitHubClient
 from craft_dl.models import Dl
 from craft_dl.progress import Bars
 from craft_dl.report import ErrorCollector
-from craft_dl.selection import split_values
+from craft_dl.selection import is_wildcard, split_values
 from craft_dl.sync import Context, run
 from craft_dl.token import resolve_token
 
@@ -26,7 +26,7 @@ DEFAULT_REPO_DIR = Path("~/git/storytold/")
 
 def parse_dl(values: list[str]) -> set[Dl]:
     names = split_values(values)
-    if not names:
+    if not names or any(is_wildcard(name) or name.lower() == "both" for name in names):
         return set(Dl)
     # end if
     try:

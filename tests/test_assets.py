@@ -72,3 +72,9 @@ def test_split_platform() -> None:
     assert split_platform("Apple") == ("mac", None)
     with pytest.raises(ValueError, match="amiga"):
         split_platform("amiga")
+
+
+def test_silicon_is_apple_silicon() -> None:
+    assert variant_matches("silicon", "p-0.5.0-linux-aarch64.deb")
+    assert variant_matches("silicon", "p-0.5.0-macos-universal.dmg")
+    assert not variant_matches("silicon", "p-0.5.0-linux-x86_64.deb")

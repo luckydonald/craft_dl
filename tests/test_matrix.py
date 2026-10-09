@@ -26,7 +26,7 @@ ARTCRAFT_NOTHING = {
 EXPECTED_NOTHING: set[tuple[str, str]] = {("artcraft", flag) for flag in ARTCRAFT_NOTHING} | {
     (repo, flag) for repo in REPOS for flag in ("setup", "x64-setup", "exe", "win-setup", "win-x64-setup") if repo != "artcraft"
 }
-ARM = ["aarch64", "arm64", "armv8", "m1", "m2", "apple-silicon", "apple-chip"]
+ARM = ["aarch64", "arm64", "armv8", "m1", "m2", "silicon", "apple-silicon", "apple-chip"]
 INTEL = ["x64", "x86_64", "x86-64", "amd64", "intel"]
 X86 = ["x86", "i386", "i686", "ia32"]
 NOT_CLASSIFIED = {name for _, _, name in all_assets() if platform_of(name) is None}

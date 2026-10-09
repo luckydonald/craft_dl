@@ -166,3 +166,9 @@ Toggle with `--dl-cli=both/true/yes/ja/j/y/1|app/false/no/nein/n/0|cli-only/only
 
 ❯ open .
 
+❯ Alright, changes to the parsing:
+- Allow `*` or `all` for most flags to be "all" or "unfiltered" as appropreate.:
+  - `--dl`, `--app`, `--release`, `--platform`, `--variant`, `--dl-cli`
+- `silicon` shall be an alias to `apple-silicon`.
+- This is already adjusted correctly in the `README.md`.
+

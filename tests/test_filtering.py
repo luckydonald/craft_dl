@@ -102,3 +102,8 @@ def test_missing_releases_and_typos() -> None:
     typo = Selector(("photocraft",), (), (), ("flatpack",))
     release = next(r for r in releases_of("photocraft") if r.tag == "v0.5.0")
     assert unmatched_selectors([typo], release.assets) == [typo]
+
+
+@pytest.mark.parametrize("value", ["*", "all", "ALL"])
+def test_dl_cli_wildcard(value: str) -> None:
+    assert parse_cli_mode(value) is CliMode.both
