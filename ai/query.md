@@ -164,3 +164,5 @@ Toggle with `--dl-cli=both/true/yes/ja/j/y/1|app/false/no/nein/n/0|cli-only/only
 ❯ Conversation compacted <kbd>auto</kbd>:
 > - [Result (`21628` chars, `21.1 KB`)](output/compact/001.5896bf8d-5c71-413f-9506-93f8e50e32ca/result.md)
 
+❯ open .
+
