@@ -9,6 +9,7 @@ from cyclopts import App, Parameter
 from rich.console import Console
 from rich.logging import RichHandler
 
+from craft_dl import smb
 from craft_dl.chain import ChainError, Selector, chain_apps, parse_chain
 from craft_dl.filtering import CliMode, parse_cli_mode
 from craft_dl.github import GitHubClient
@@ -39,6 +40,13 @@ def parse_dl(values: list[str]) -> set[Dl]:
 # end def
 
 
+def setup_logging() -> Console:
+    console = Console(stderr=True)
+    logging.basicConfig(level=logging.INFO, format="%(message)s", handlers=[RichHandler(console=console, show_path=False)])
+    return console
+# end def
+
+
 def parse_filters(tokens: Sequence[str], dl_cli: str) -> tuple[list[Selector], CliMode]:
     try:
         return parse_chain(tokens), parse_cli_mode(dl_cli)
@@ -49,10 +57,8 @@ def parse_filters(tokens: Sequence[str], dl_cli: str) -> tuple[list[Selector], C
 
 
 async def download_async(
-    dl: set[Dl], chain: list[Selector], cli_mode: CliMode, repo_dir: Path, github_token: str | None,
+    dl: set[Dl], chain: list[Selector], cli_mode: CliMode, repo_dir: Path, github_token: str | None, console: Console,
 ) -> int:
-    console = Console(stderr=True)
-    logging.basicConfig(level=logging.INFO, format="%(message)s", handlers=[RichHandler(console=console, show_path=False)])
     errors = ErrorCollector()
     logger.info("Resolving the GitHub token (--github-token, gh auth token, $GITHUB_TOKEN)…")
     token = await resolve_token(github_token)
@@ -80,7 +86,7 @@ def download(
     platform: Annotated[list[str], Parameter(help="Only this platform of the preceding `--release`: `win`, `mac` (`apple`, `macos`), `linux`, `freebsd`. `win-x64-setup` adds variants.")] = [],
     variant: Annotated[list[str], Parameter(help="Only these variants (`msi`, `dmg`, `x64`, `aarch64`, `m1`, `portable`, `x64-setup`, …), alternatives; dashes combine.")] = [],
     dl_cli: Annotated[str, Parameter(help="Assets containing `-cli-`: `both` (default), `app` (skip them), `cli-only`. Also `yes/no/only`, `ja/nein/nur`, `1/0/-1`.")] = "both",
-    repo_dir: Annotated[Path, Parameter(help="Where the repositories live.")] = DEFAULT_REPO_DIR,
+    repo_dir: Annotated[Path, Parameter(help="Where the repositories live; `smb://<server>/<mount>/<dir>` is mounted first (macOS).")] = DEFAULT_REPO_DIR,
     github_token: Annotated[str | None, Parameter(help="Overrides `gh auth token` and `$GITHUB_TOKEN`.")] = None,
     tokens: Annotated[Sequence[str] | None, Parameter(parse=False)] = None,
 ) -> int:
@@ -90,7 +96,16 @@ def download(
     e.g. `--app=art --release=latest --platform=win --variant=msi --platform=mac --app=photo --variant=dmg`.
     """
     chain, cli_mode = parse_filters(sys.argv[1:] if tokens is None else tokens, dl_cli)
-    return asyncio.run(download_async(parse_dl(dl), chain, cli_mode, repo_dir.expanduser(), github_token))
+    console = setup_logging()
+    repo_dir = repo_dir.expanduser()
+    if smb.has_protocol(repo_dir):
+        try:
+            repo_dir = smb.mount(repo_dir)
+        except smb.SmbError as error:
+            raise SystemExit(str(error)) from error
+        # end try
+    # end if
+    return asyncio.run(download_async(parse_dl(dl), chain, cli_mode, repo_dir, github_token, console))
 # end def
 
 

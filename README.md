@@ -28,6 +28,7 @@ uv run craft_dl --app='**'                        # every storytold/* repository
   - `**` or `@storytold` is a special value to download all @storytold repos, not only those matching `*craft`.
 - **`--repo-dir`**: Where those downloads should be placed into.
   - **default**: `~/git/storytold/`.
+  - An `smb://{ServerName}._smb._tcp.local/{Mount}/{dir1/dir2}` path is mounted first (macOS, `open smb://…`, waits up to 30 s) and then used as `/Volumes/{Mount}/{dir1/dir2}`.
 - **`--github-token`**: Optional token to use with the GitHub API, to prevent/reduce hitting rate limits.
   - if not set, checks `gh auth token` (if installed), or
   - or the environment variable `$GITHUB_TOKEN`.

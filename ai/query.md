@@ -192,3 +192,7 @@ Possibly there's a porcelan mode or flag to get better progress, too.
 
 ❯ Plan accepted, auto mode.
 
+❯ If the path is `smb://{ServerName}._smb._tcp.local/{Mount}/{dir1/dir2}`, it needs to be mouted and then accessed at `/Volumes/{Mount}/{dir1/dir2}`.
+See @~/Documents/programming/Python/archive_apps/Makefile for how it's done,
+replicate that in python, with a separate `smb.py` file: `if smb.has_protocol(path: Path):\n  path = smb.mount(path: Path)`
+
