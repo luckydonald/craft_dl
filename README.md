@@ -18,7 +18,7 @@ uv run craft_dl --app='**'                        # every storytold/* repository
 ##### Parameters:
 - **`--dl`**: Source code and/or releases.
   - `repo` (clone/fetch + backup refs)
-  - `release` (release notes + assets into `_releases_/<tag>/`).
+  - `release` (release notes + assets into `_releases_/<tag>/`). `_releases_/latest` is a relative symlink to the latest release's folder, updated on every run even if nothing new is downloaded (skipped if a filter excluded that release).
   - `*`, `all`, `both` (**default**) are equivalent to `repo,release`.
 - **`--app`**: Which app to download.
   - Free text entry.

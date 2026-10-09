@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from craft_dl.report import ErrorCollector
 logger = logging.getLogger(__name__)
 
 RELEASES_DIR = "_releases_"
+LATEST_LINK = "latest"
 CONCURRENT_DOWNLOADS = 4
 
 
@@ -32,6 +34,33 @@ def release_dir(root: Path, tag: str) -> Path:
         raise ValueError(f"unsafe release tag {tag!r}")
     # end if
     return path
+# end def
+
+
+def link_latest(root: Path, tag: str) -> bool:
+    """Points `_releases_/latest` at the latest release's folder (relative link, replaced atomically).
+
+    Returns `False` if that folder doesn't exist (e.g. a filter excluded it) or `latest` is a real folder we must not touch.
+    """
+    directory = release_dir(root, tag)
+    link = root / LATEST_LINK
+    if not directory.is_dir():
+        return False
+    # end if
+    if link.exists() and not link.is_symlink():
+        logger.warning("%s is a real directory, not touching it", link)
+        return False
+    # end if
+    target = os.path.relpath(directory, root.resolve())
+    if link.is_symlink() and os.readlink(link) == target:
+        return True
+    # end if
+    temporary = root / f".{LATEST_LINK}.tmp"
+    temporary.unlink(missing_ok=True)
+    temporary.symlink_to(target, target_is_directory=True)
+    temporary.replace(link)
+    logger.info("%s -> %s", link, target)
+    return True
 # end def
 
 

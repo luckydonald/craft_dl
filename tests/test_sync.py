@@ -1,3 +1,4 @@
+import os
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -111,7 +112,8 @@ async def test_only_matching_assets_are_downloaded(tmp_path: Path) -> None:
         await run(["fake"], ctx, names, chain)
     # end with
     release_dir = tmp_path / "fakecraft" / "_releases_"
-    assert sorted(p.name for p in release_dir.iterdir() if p.is_dir()) == ["v2.0.0"]
+    assert sorted(p.name for p in release_dir.iterdir() if p.is_dir() and not p.is_symlink()) == ["v2.0.0"]
+    assert os.readlink(release_dir / "latest") == "v2.0.0"
     assert sorted(p.name for p in (release_dir / "v2.0.0").iterdir()) == ["README.md", "SHA256SUMS.txt", "a-1.0-windows-x64.msi"]
     assert route.call_count == 2
     assert [(f.step, f.detail) for f in errors.failures] == [("select release", "release 'v9.9.9' not found")]
@@ -129,3 +131,52 @@ async def test_dl_cli_app_skips_cli_assets(tmp_path: Path) -> None:
     # end with
     assert sorted(p.name for p in (tmp_path / "fakecraft" / "_releases_" / "v1").iterdir()) == ["README.md", "a-1-macos.dmg"]
 # end def
+
+
+@respx.mock
+async def test_latest_symlink_is_set_even_when_nothing_is_downloaded(tmp_path: Path) -> None:
+    route = respx.get("https://example.test/a").mock(return_value=httpx.Response(200, content=b"abc"))
+    for _ in range(2):
+        async with httpx.AsyncClient() as http:
+            ctx = Context(repo_dir=tmp_path, dl={Dl.release}, errors=ErrorCollector(), bars=Bars(enabled=False), source=FakeSource(), http=http)
+            await run(["*"], ctx, names)
+        # end with
+    # end for
+    assert route.call_count == 1, "second run skips the existing file"
+    assert os.readlink(tmp_path / "fakecraft" / "_releases_" / "latest") == "v1"
+    (tmp_path / "fakecraft" / "_releases_" / "latest").unlink()
+    async with httpx.AsyncClient() as http:
+        ctx = Context(repo_dir=tmp_path, dl={Dl.release}, errors=ErrorCollector(), bars=Bars(enabled=False), source=FakeSource(), http=http)
+        await run(["*"], ctx, names)
+    # end with
+    assert (tmp_path / "fakecraft" / "_releases_" / "latest" / "a.bin").read_bytes() == b"abc"
+
+
+@respx.mock
+async def test_no_latest_symlink_when_the_filter_skips_that_release(tmp_path: Path) -> None:
+    respx.get(url__startswith="https://example.test/").mock(return_value=httpx.Response(200, content=b"x"))
+    chain = parse_chain("--app=fake --release=v1.0.0".split())
+    async with httpx.AsyncClient() as http:
+        ctx = Context(repo_dir=tmp_path, dl={Dl.release}, errors=ErrorCollector(), bars=Bars(enabled=False), source=MultiSource(), http=http)
+        await run(["fake"], ctx, names, chain)
+    # end with
+    root = tmp_path / "fakecraft" / "_releases_"
+    assert sorted(p.name for p in root.iterdir() if p.is_dir() and not p.is_symlink()) == ["v1.0.0"]
+    assert not (root / "latest").is_symlink()
+    assert ctx.errors.failures == []
+
+
+async def test_repo_without_releases_is_not_an_error(tmp_path: Path) -> None:
+    class NoReleases(FakeSource):
+        async def list_releases(self, repo: str) -> AsyncIterator[ReleaseInfo]:
+            return
+            yield
+
+        async def latest_release(self, repo: str) -> ReleaseInfo:
+            raise RuntimeError("404 Not Found")
+
+    async with httpx.AsyncClient() as http:
+        ctx = Context(repo_dir=tmp_path, dl={Dl.release}, errors=ErrorCollector(), bars=Bars(enabled=False), source=NoReleases(), http=http)
+        await run(["*"], ctx, names)
+    # end with
+    assert ctx.errors.failures == []

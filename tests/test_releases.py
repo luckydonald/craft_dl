@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import httpx
@@ -5,7 +6,7 @@ import pytest
 import respx
 
 from craft_dl.models import AssetInfo, ReleaseInfo
-from craft_dl.releases import download_asset, ensure_releases_dir, release_dir, write_readme
+from craft_dl.releases import download_asset, ensure_releases_dir, link_latest, release_dir, write_readme
 
 
 def test_ensure_releases_dir(tmp_path: Path) -> None:
@@ -46,3 +47,26 @@ async def test_download_skip_and_cleanup(tmp_path: Path) -> None:
     assert not (tmp_path / "b.zip").exists()
     assert not (tmp_path / "b.zip.part").exists()
 # end def
+
+
+def test_link_latest_creates_and_moves_a_relative_symlink(tmp_path: Path) -> None:
+    root = ensure_releases_dir(tmp_path)
+    (root / "v1").mkdir()
+    (root / "v2").mkdir()
+    assert link_latest(root, "v1")
+    assert os.readlink(root / "latest") == "v1"
+    assert link_latest(root, "v1")
+    assert link_latest(root, "v2")
+    assert os.readlink(root / "latest") == "v2"
+    assert (root / "latest").resolve() == (root / "v2").resolve()
+    assert not (root / ".latest.tmp").exists()
+
+
+def test_link_latest_skips_missing_folder_and_real_directory(tmp_path: Path) -> None:
+    root = ensure_releases_dir(tmp_path)
+    assert not link_latest(root, "v9")
+    assert not (root / "latest").exists() and not (root / "latest").is_symlink()
+    (root / "v1").mkdir()
+    (root / "latest").mkdir()
+    assert not link_latest(root, "v1")
+    assert not (root / "latest").is_symlink()

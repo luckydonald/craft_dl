@@ -196,3 +196,7 @@ Possibly there's a porcelan mode or flag to get better progress, too.
 See @~/Documents/programming/Python/archive_apps/Makefile for how it's done,
 replicate that in python, with a separate `smb.py` file: `if smb.has_protocol(path: Path):\n  path = smb.mount(path: Path)`
 
+❯ While you were running stuff just now, I got a finder progress bar window saying `Connecting to smb://nohost/nomount …` and then an dialog window saying `There was a problem connecting to the server "nohost".`.
+
+❯ If you're downloading releases (not `--dl=app`), symlink `latest` to the latest release's folder. This should be done independently of actually having to download any new releases.
+

@@ -14,7 +14,7 @@ from craft_dl.filtering import CliMode, matching_selectors, missing_releases, se
 from craft_dl.github import ORG, ReleaseSource
 from craft_dl.models import Dl, ReleaseInfo
 from craft_dl.progress import Bars
-from craft_dl.releases import CONCURRENT_DOWNLOADS, ensure_releases_dir, sync_release
+from craft_dl.releases import CONCURRENT_DOWNLOADS, ensure_releases_dir, link_latest, sync_release
 from craft_dl.report import ErrorCollector
 from craft_dl.selection import resolve_apps
 
@@ -93,13 +93,18 @@ async def sync_git(name: str, ctx: Context) -> None:
 # end def
 
 
-async def fetch_latest(name: str, ctx: Context) -> ReleaseInfo | None:
+async def fetch_latest(name: str, ctx: Context, report: bool = True) -> ReleaseInfo | None:
+    """Without `report` a failure (e.g. a repo without any release) is only logged: nobody asked for `latest` explicitly."""
     assert ctx.source is not None
     logger.info("%s: fetching the latest release from the GitHub API…", name)
     try:
         return await ctx.source.latest_release(name)
     except Exception as error:
-        ctx.errors.add(name, Dl.release, "latest release", error)
+        if report:
+            ctx.errors.add(name, Dl.release, "latest release", error)
+        else:
+            logger.info("%s: no latest release (%s)", name, error)
+        # end if
         return None
     # end try
 # end def
@@ -109,7 +114,7 @@ async def list_all_releases(name: str, ctx: Context, want_latest: bool) -> Listi
     """All releases, or at least `latest` if listing them fails."""
     assert ctx.source is not None
     listing = Listing()
-    latest = await fetch_latest(name, ctx) if want_latest else None
+    latest = await fetch_latest(name, ctx, report=want_latest)
     logger.info("%s: listing releases from the GitHub API…", name)
     try:
         async for release in ctx.source.list_releases(name):
@@ -119,7 +124,7 @@ async def list_all_releases(name: str, ctx: Context, want_latest: bool) -> Listi
         listing.complete = False
         ctx.errors.add(name, Dl.release, "list releases", error)
         if latest is None and not want_latest:
-            latest = await fetch_latest(name, ctx)
+            latest = await fetch_latest(name, ctx, report=True)
         # end if
         if latest is not None and all(r.tag != latest.tag for r in listing.releases):
             listing.releases.append(latest)
@@ -176,6 +181,13 @@ async def sync_releases(name: str, ctx: Context) -> None:
         sync_release(name, release, root, ctx.http, ctx.errors, ctx.semaphore, ctx.bars.add_work, ctx.bars.work_done)
         for release in releases
     ))
+    if listing.latest_tag is not None:
+        try:
+            link_latest(root, listing.latest_tag)
+        except (OSError, ValueError) as error:
+            ctx.errors.add(name, Dl.release, "latest symlink", error)
+        # end try
+    # end if
 # end def
 
 
