@@ -48,3 +48,22 @@
 > </details>
 >
 
+❯ Plan denied:
+> Changes: 
+> - Wouldn't be using a typed cli arg parser be better?
+> - If there's a proper typed async github client we don't need to roll our own.
+> - Tag aka. release download is independent of git fetch step.
+> - If tag listing does not work try at least `latest`.
+> - Show a progress bar (or two), with overall progess (all repos) + in-repo progress.
+>
+> Note: The user's next message may contain a correction or preference. Pay close attention — if they explain what went wrong or how they'd prefer you to work, consider saving that to memory for future sessions.
+
+❯ Plan denied:
+> The default for repo names shall be `*craft` so e.g. `placeholder-artcraft` or `craft-fonts` would not be included.
+>
+> Note: The user's next message may contain a correction or preference. Pay close attention — if they explain what went wrong or how they'd prefer you to work, consider saving that to memory for future sessions.
+
+❯ Plan accepted, auto mode.
+
+❯ [/code-style](./skills/code-style/SKILL.md)
+
