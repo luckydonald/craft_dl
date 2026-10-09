@@ -12,6 +12,7 @@ class Bars:
         )
         self.overall: TaskID = self.progress.add_task("all repositories", total=0)
         self.current: TaskID = self.progress.add_task("-", total=0, visible=False)
+        self.done = 0
     # end def
 
     def __enter__(self) -> "Bars":
@@ -28,6 +29,7 @@ class Bars:
     # end def
 
     def start_repo(self, name: str, steps: int) -> None:
+        self.done = 0
         self.progress.reset(self.current, total=steps, description=name, visible=True)
     # end def
 
@@ -37,7 +39,13 @@ class Bars:
     # end def
 
     def work_done(self, count: int = 1) -> None:
-        self.progress.advance(self.current, count)
+        self.done += count
+        self.progress.update(self.current, completed=self.done)
+    # end def
+
+    def step_progress(self, fraction: float) -> None:
+        """Partial progress (0..1) of the step in flight, e.g. a running `git fetch`."""
+        self.progress.update(self.current, completed=self.done + min(max(fraction, 0.0), 0.99))
     # end def
 
     def finish_repo(self) -> None:

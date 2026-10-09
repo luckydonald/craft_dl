@@ -172,3 +172,18 @@ Toggle with `--dl-cli=both/true/yes/ja/j/y/1|app/false/no/nein/n/0|cli-only/only
 - `silicon` shall be an alias to `apple-silicon`.
 - This is already adjusted correctly in the `README.md`.
 
+❯ The progress bar for git pulls doesn't seem to work, it seems to be stuck on 0%. Also log git's output and generally what you do.
+We already get the HTTP Request logs via httpx or whatever. But like announce stages like "Fetching repository list from GitHub API…", and have git cli commands print to that log, too.
+
+❯ Update: apparently after ~3 minutes we got 50% artcraft, whatever that means with `uv run craft_dl --dl=repo` which should not download any releases...
+
+❯ Aha, that other part were the backup refs apparently, got 
+
+
+<pasted_content id="b3c5">
+[10/09/26 19:00:09] INFO     artcraft: created 2626 backup ref(s)
+[10/09/26 19:00:24] INFO     photocraft: created 497 backup ref(s)
+[10/09/26 19:00:26] INFO     pdfcraft: created 25 backup ref(s)
+[10/09/26 19:00:29] INFO     filmcraft: created 31 backup ref(s)
+</pasted_content id="b3c5">
+

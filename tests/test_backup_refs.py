@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from craft_dl import git_ops
-from craft_dl.backup_refs import backup_refs, named_ref
+from craft_dl.backup_refs import BackupResult, backup_refs, named_ref, write_batch
 from tests.conftest import git
 
 NOW = datetime(2026, 10, 9, 12, 30, 5, tzinfo=UTC)
@@ -38,3 +38,15 @@ async def test_backup_is_idempotent_and_survives_force_push(remote: Path, tmp_pa
     assert git("rev-parse", f"bak/commit/{old_tip}", cwd=checkout) == old_tip
     assert git("rev-parse", f"bak/commit/{new_tip}", cwd=checkout) == new_tip
 # end def
+
+
+async def test_batch_failure_falls_back_to_single_refs(tmp_path: Path, remote: Path) -> None:
+    checkout = tmp_path / "checkout"
+    await git_ops.clone(str(remote), checkout)
+    head = (await git_ops.run_git("rev-parse", "HEAD", cwd=checkout)).strip()
+    result = BackupResult()
+    # the second ref is invalid, which fails the whole transaction
+    await write_batch(checkout, [("refs/heads/bak/ok/1", head), ("refs/heads/bak/bad..name", head)], result)
+    assert result.created == 1
+    assert len(result.errors) == 1
+    assert (await git_ops.run_git("rev-parse", "refs/heads/bak/ok/1", cwd=checkout)).strip() == head

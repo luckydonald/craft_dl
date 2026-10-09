@@ -62,11 +62,14 @@ async def sync_git(name: str, ctx: Context) -> None:
     url = f"https://github.com/{ORG}/{name}.git"
     try:
         if not path.exists():
-            await git_ops.clone(url, path)
+            logger.info("%s: cloning %s", name, url)
+            await git_ops.clone(url, path, ctx.bars.step_progress)
         elif not (path / ".git").exists():
-            await git_ops.init_and_fetch(url, path)
+            logger.info("%s: %s is not a git repository yet, initializing it and fetching %s", name, path, url)
+            await git_ops.init_and_fetch(url, path, ctx.bars.step_progress)
         else:
-            await git_ops.fetch_all(path)
+            logger.info("%s: fetching all remotes and tags (forced, no prune)", name)
+            await git_ops.fetch_all(path, ctx.bars.step_progress)
         # end if
     except (git_ops.GitError, OSError) as error:
         ctx.errors.add(name, Dl.repo, "clone/fetch", error)
@@ -77,7 +80,8 @@ async def sync_git(name: str, ctx: Context) -> None:
         return
     # end if
     try:
-        result = await backup_refs(path, ctx.clock())
+        logger.info("%s: backing up new or changed branch/tag tips under bak/", name)
+        result = await backup_refs(path, ctx.clock(), ctx.bars.step_progress)
         logger.info("%s: created %d backup ref(s)", name, result.created)
         for message in result.errors:
             ctx.errors.add(name, Dl.repo, "backup refs", message)
@@ -91,6 +95,7 @@ async def sync_git(name: str, ctx: Context) -> None:
 
 async def fetch_latest(name: str, ctx: Context) -> ReleaseInfo | None:
     assert ctx.source is not None
+    logger.info("%s: fetching the latest release from the GitHub API…", name)
     try:
         return await ctx.source.latest_release(name)
     except Exception as error:
@@ -105,6 +110,7 @@ async def list_all_releases(name: str, ctx: Context, want_latest: bool) -> Listi
     assert ctx.source is not None
     listing = Listing()
     latest = await fetch_latest(name, ctx) if want_latest else None
+    logger.info("%s: listing releases from the GitHub API…", name)
     try:
         async for release in ctx.source.list_releases(name):
             listing.releases.append(release)
@@ -155,12 +161,16 @@ async def sync_releases(name: str, ctx: Context) -> None:
         ctx.errors.add(name, Dl.release, "_releases_ setup", error)
     # end try
     ctx.bars.work_done()
+    if root is not None:
+        logger.info("%s: saving releases into %s", name, root)
+    # end if
     if ctx.source is None or ctx.http is None or root is None:
         ctx.bars.work_done()
         return
     # end if
     listing = await list_all_releases(name, ctx, wants_latest(ctx.selectors.get(name, [])))
     releases = filter_releases(name, listing, ctx)
+    logger.info("%s: %d of %d release(s) selected", name, len(releases), len(listing.releases))
     ctx.bars.work_done()
     await asyncio.gather(*(
         sync_release(name, release, root, ctx.http, ctx.errors, ctx.semaphore, ctx.bars.add_work, ctx.bars.work_done)
@@ -172,6 +182,7 @@ async def sync_releases(name: str, ctx: Context) -> None:
 async def sync_repo(name: str, ctx: Context) -> None:
     """`repo` and `release` parts are independent: a failure in one never skips the other."""
     steps = (2 if Dl.repo in ctx.dl else 0) + (2 if Dl.release in ctx.dl else 0)
+    logger.info("%s: starting (%s)", name, ", ".join(sorted(d.value for d in ctx.dl)))
     ctx.bars.start_repo(name, steps)
     if Dl.repo in ctx.dl:
         await sync_git(name, ctx)
@@ -188,17 +199,20 @@ async def run(
 ) -> None:
     """If the repo list can't be fetched, still run `git fetch` in the existing checkouts."""
     offline = False
+    logger.info("Fetching the repository list from the GitHub API…")
     try:
         names = await list_names()
     except Exception as error:
         ctx.errors.add(None, None, "list repositories", error)
         names = local_repo_names(ctx.repo_dir)
         offline = True
+        logger.warning("Repository list unavailable, falling back to the %d local checkout(s) in %s", len(names), ctx.repo_dir)
     # end try
     if offline:
         ctx.dl.discard(Dl.release)
     # end if
     resolved, unresolved = resolve_apps(apps, names)
+    logger.info("%d repositor%s selected: %s", len(resolved), "y" if len(resolved) == 1 else "ies", ", ".join(resolved) or "-")
     for app in unresolved:
         ctx.errors.add(None, None, "resolve app", f"no repository matches {app!r}")
     # end for

@@ -48,8 +48,10 @@ async def download_asset(http: httpx.AsyncClient, asset: AssetInfo, directory: P
     # end if
     target = directory / asset.name
     if target.exists() and target.stat().st_size == asset.size:
+        logger.info("%s: already downloaded", asset.name)
         return False
     # end if
+    logger.info("%s: downloading %.1f MiB", asset.name, asset.size / 1024 / 1024)
     partial = target.with_name(target.name + ".part")
     try:
         async with http.stream("GET", asset.url) as response:
@@ -73,6 +75,7 @@ async def sync_release(
     semaphore: asyncio.Semaphore, add_work: Callable[[int], None], work_done: Callable[[int], None],
 ) -> None:
     add_work(1 + len(release.assets))
+    logger.info("%s %s: writing README.md, %d asset(s) to download", repo, release.tag, len(release.assets))
     try:
         directory = release_dir(root, release.tag)
         write_readme(directory, release)

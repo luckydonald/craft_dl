@@ -19,6 +19,8 @@ from craft_dl.selection import is_wildcard, split_values
 from craft_dl.sync import Context, run
 from craft_dl.token import resolve_token
 
+logger = logging.getLogger(__name__)
+
 cli = App(name="craft_dl", help="Archive the storytold/*craft repositories: git history plus release assets.")
 
 DEFAULT_REPO_DIR = Path("~/git/storytold/")
@@ -52,7 +54,9 @@ async def download_async(
     console = Console(stderr=True)
     logging.basicConfig(level=logging.INFO, format="%(message)s", handlers=[RichHandler(console=console, show_path=False)])
     errors = ErrorCollector()
+    logger.info("Resolving the GitHub token (--github-token, gh auth token, $GITHUB_TOKEN)…")
     token = await resolve_token(github_token)
+    logger.info("Using %s", "an API token" if token else "no API token (rate limits apply)")
     client = GitHubClient(token)
     with Bars(console) as bars:
         async with client.http_client() as http:

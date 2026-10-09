@@ -1,9 +1,15 @@
 import re
 from dataclasses import dataclass, field
+import logging
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-from craft_dl.git_ops import GitError, run_git, update_ref
+from craft_dl.git_ops import GitError, run_git, update_ref, update_refs
+
+logger = logging.getLogger(__name__)
+
+BATCH_SIZE = 500
 
 BACKUP_PREFIX = "refs/heads/bak/"
 NAMED_PATTERN = re.compile(r"^bak/(branch|tag)/(.+)/\d{4}-\d{2}-\d{2}/\d{2}-\d{2}-\d{2}/([0-9a-f]{40,64})$")
@@ -31,7 +37,7 @@ def commit_ref(sha: str) -> str:
 async def current_refs(path: Path) -> list[tuple[str, str, str]]:
     """`(kind, name, commit sha)` for every remote branch and tag; annotated tags are peeled."""
     fmt = "%(refname)%00%(objectname)%00%(objecttype)%00%(*objectname)%00%(*objecttype)"
-    output = await run_git("for-each-ref", f"--format={fmt}", "refs/remotes", "refs/tags", cwd=path)
+    output = await run_git("for-each-ref", f"--format={fmt}", "refs/remotes", "refs/tags", cwd=path, quiet=True)
     refs: list[tuple[str, str, str]] = []
     for line in output.splitlines():
         refname, sha, object_type, peeled_sha, peeled_type = line.split("\0")
@@ -56,7 +62,7 @@ async def current_refs(path: Path) -> list[tuple[str, str, str]]:
 
 
 async def existing_backups(path: Path) -> tuple[set[tuple[str, str, str]], set[str]]:
-    output = await run_git("for-each-ref", "--format=%(refname:short)", BACKUP_PREFIX, cwd=path)
+    output = await run_git("for-each-ref", "--format=%(refname:short)", BACKUP_PREFIX, cwd=path, quiet=True)
     named: set[tuple[str, str, str]] = set()
     commits: set[str] = set()
     for line in output.splitlines():
@@ -70,31 +76,49 @@ async def existing_backups(path: Path) -> tuple[set[tuple[str, str, str]], set[s
 # end def
 
 
-async def backup_refs(path: Path, now: datetime) -> BackupResult:
+async def write_batch(path: Path, batch: list[tuple[str, str]], result: BackupResult) -> None:
+    """One transaction per batch; if it fails, retry ref by ref so a single bad ref only loses itself."""
+    try:
+        await update_refs(path, batch)
+        result.created += len(batch)
+        return
+    except GitError as error:
+        logger.warning("batch update of %d ref(s) failed (%s), retrying one by one", len(batch), error)
+    # end try
+    for ref, sha in batch:
+        try:
+            await update_ref(path, ref, sha)
+            result.created += 1
+        except GitError as error:
+            result.errors.append(f"{ref}: {error}")
+        # end try
+    # end for
+# end def
+
+
+async def backup_refs(path: Path, now: datetime, on_progress: Callable[[float], None] | None = None) -> BackupResult:
     """Create `bak/*` branches for every new or changed branch/tag tip, so force pushes stay recoverable.
 
     A tip counts as new if there's no backup for that exact `(kind, name, commit)` yet, which makes reruns idempotent.
     """
     result = BackupResult()
     named, commits = await existing_backups(path)
+    pending: list[tuple[str, str]] = []
     for kind, name, sha in await current_refs(path):
         if (kind, name, sha) not in named:
-            try:
-                await update_ref(path, "refs/heads/" + named_ref(kind, name, now, sha), sha)
-                result.created += 1
-                named.add((kind, name, sha))
-            except GitError as error:
-                result.errors.append(f"{kind} {name}: {error}")
-            # end try
+            pending.append(("refs/heads/" + named_ref(kind, name, now, sha), sha))
+            named.add((kind, name, sha))
         # end if
         if sha not in commits:
-            try:
-                await update_ref(path, "refs/heads/" + commit_ref(sha), sha)
-                result.created += 1
-                commits.add(sha)
-            except GitError as error:
-                result.errors.append(f"commit {sha}: {error}")
-            # end try
+            pending.append(("refs/heads/" + commit_ref(sha), sha))
+            commits.add(sha)
+        # end if
+    # end for
+    logger.info("%d backup ref(s) to create", len(pending))
+    for start in range(0, len(pending), BATCH_SIZE):
+        await write_batch(path, pending[start:start + BATCH_SIZE], result)
+        if on_progress is not None:
+            on_progress(min(start + BATCH_SIZE, len(pending)) / len(pending))
         # end if
     # end for
     return result
