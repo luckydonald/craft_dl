@@ -202,3 +202,20 @@ replicate that in python, with a separate `smb.py` file: `if smb.has_protocol(pa
 
 ❯ The release download progress bar should have a third progress bar for the current file, and should also show speed per second. Both git dl (which already has speed per second) and release + single file bars should show an estimated remaining time.
 
+❯ We can basically split the git bar in 3 bars, too, if that's easier. After all we got the lines
+```txt
+[10/09/26 19:11:08] INFO     
+
+<pasted_content id="b3c5">
+git clone: remote: Enumerating objects: 303072, done.
+[10/09/26 19:11:08] INFO     git clone: remote: Counting objects: 100% (4408/4408), done.
+                    INFO     git clone: remote: Compressing objects: 100% (1025/1025), done.
+</pasted_content id="b3c5">
+
+```
+- adding 5 substeps there as bar inbetween:
+  1. enumerating (will jump from `0%` to `100%` once complete, as max is unknown) = `[0 - 1/4)`  of middle bar
+  2. counting (percentage is known because `(XXX/YYY)`) = `[1/4 - 2/4)` of middle bar
+  3. compressing (percentage is known because `(XXX/YYY)`) = `[2/4 - 3/4)` of middle bar
+  4. and the last part we already parse for the current progress bar. Download? (percentage is known because `(XXX/YYY)`) = `[3/4 - 4/4]` of middle bar
+

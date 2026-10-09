@@ -7,6 +7,8 @@ from rich.console import Console
 from rich.progress import BarColumn, Progress, ProgressColumn, Task, TaskID, TaskProgressColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.text import Text
 
+from craft_dl.git_progress import GitProgress
+
 SPEED_WINDOW_SECONDS = 5.0
 DETAIL_INTERVAL_SECONDS = 0.25
 
@@ -73,6 +75,7 @@ class Bars:
         self.overall: TaskID = self.progress.add_task("all repositories", total=0, detail="")
         self.current: TaskID = self.progress.add_task("-", total=0, visible=False, detail="")
         self.done = 0
+        self.git_tasks: tuple[TaskID, TaskID] | None = None
         self.active_files = 0
         self.samples: deque[tuple[float, int]] = deque()
         self.last_detail = 0.0
@@ -102,6 +105,7 @@ class Bars:
     # end def
 
     def work_done(self, count: int = 1) -> None:
+        self.git_done()
         self.done += count
         self.progress.update(self.current, completed=self.done, detail="")
     # end def
@@ -109,6 +113,36 @@ class Bars:
     def step_progress(self, fraction: float, detail: str = "") -> None:
         """Partial progress (0..1) of the step in flight, e.g. a running `git fetch`."""
         self.progress.update(self.current, completed=self.done + min(max(fraction, 0.0), 0.99), detail=detail)
+    # end def
+
+    def git_progress(self, progress: GitProgress) -> None:
+        """Two extra rows while git works: its steps (equal shares) and the step in flight (`done/total`, jumping 0 to 100% if unknown)."""
+        if self.git_tasks is None:
+            self.git_tasks = (
+                self.progress.add_task("", total=progress.count, detail=""),
+                self.progress.add_task("", total=100, detail=""),
+            )
+        # end if
+        steps, phase = self.git_tasks
+        self.progress.update(
+            steps, description=f"  git step {progress.index + 1}/{progress.count}", total=progress.count,
+            completed=progress.index + progress.phase_fraction,
+        )
+        total = progress.total if progress.total is not None else (progress.done if progress.finished else 100)
+        self.progress.update(
+            phase, description=f"    {progress.phase}", total=max(total, 1), completed=progress.done if progress.total is not None or progress.finished else 0,
+            detail=progress.detail,
+        )
+        self.step_progress(progress.fraction)
+    # end def
+
+    def git_done(self) -> None:
+        if self.git_tasks is not None:
+            for task in self.git_tasks:
+                self.progress.remove_task(task)
+            # end for
+            self.git_tasks = None
+        # end if
     # end def
 
     def finish_repo(self) -> None:

@@ -63,13 +63,13 @@ async def sync_git(name: str, ctx: Context) -> None:
     try:
         if not path.exists():
             logger.info("%s: cloning %s", name, url)
-            await git_ops.clone(url, path, ctx.bars.step_progress)
+            await git_ops.clone(url, path, ctx.bars.git_progress)
         elif not (path / ".git").exists():
             logger.info("%s: %s is not a git repository yet, initializing it and fetching %s", name, path, url)
-            await git_ops.init_and_fetch(url, path, ctx.bars.step_progress)
+            await git_ops.init_and_fetch(url, path, ctx.bars.git_progress)
         else:
             logger.info("%s: fetching all remotes and tags (forced, no prune)", name)
-            await git_ops.fetch_all(path, ctx.bars.step_progress)
+            await git_ops.fetch_all(path, ctx.bars.git_progress)
         # end if
     except (git_ops.GitError, OSError) as error:
         ctx.errors.add(name, Dl.repo, "clone/fetch", error)
