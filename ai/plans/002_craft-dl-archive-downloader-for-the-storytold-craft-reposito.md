@@ -1,0 +1,110 @@
+# craft_dl: archive downloader for the `storytold/*craft` repositories
+
+**Commit style:** Skill `/commit-with-lplp-style` is active, and `/code-style` rules apply (see `ai/skills/code-style/references/py.md`).
+
+## Context
+
+`craft_dl` is freshly bootstrapped from `base/base` and contains no Python package yet (no `pyproject.toml`, only base tooling under `scripts/`).
+Goal: a CLI that mirrors every `*craft*` repository of the GitHub org `storytold` (git history plus release assets) into `~/git/storytold/`, for archival.
+Backup thoroughness beats strictness: every step may fail, the rest continues, and all failures are reported at the end with copy-pasteable retry commands.
+
+Decisions confirmed with the user:
+- Backup ref date format is ISO, with time and commit appended: `…/YYYY-MM-DD/HH-MM-SS/{commit}`.
+- GitHub is accessed only through `httpx`.
+  Token precedence: `--github-token=…`, then `gh auth token` (if `gh` is installed and logged in), then env `GITHUB_TOKEN`, else unauthenticated.
+
+## Layout
+
+New package `craft_dl/` at the repo root, Python `3.14+`, fully typed, async where practical, no `_`-prefixed names, `# end if`/`# end def`/… block comments.
+Each module is small and separately testable.
+
+- `pyproject.toml`: `uv` project, `requires-python >=3.14`, dependency `httpx`, dev deps `pytest`, `pytest-asyncio`, `respx`; script entry `craft_dl = "craft_dl.cli:main"`.
+  The local `uv` is 0.5.14, so `uv self update` (or a pinned `.python-version`) may be needed to get a 3.14 interpreter.
+- `craft_dl/__main__.py`: enables `python -m craft_dl`.
+- `craft_dl/cli.py`: `argparse`, the `download` subcommand is the default (if `argv[0]` isn't a known subcommand or `-h`, insert `download`).
+  Options: `--dl` (`repo`, `release`; comma-separated and repeatable; default all), `--app` (same list semantics; default `*`), `--repo-dir` (default `~/git/storytold/`), `--github-token`.
+- `craft_dl/selection.py`: pure functions for parsing the comma-separated/repeated values and for resolving `--app` names against the repo list.
+  - `*` means names containing `craft` (case-insensitive), `**` means every repo of the org.
+  - A name `photo` tries `photocraft` first (suffix implied if not already contained), then falls back to the bare `photo`; `craft-fonts` already contains `craft`, so it is tried as-is.
+  - Unresolvable names become a reported error, not a crash.
+- `craft_dl/github.py`: async `httpx` client (`GitHubClient`) with auth header, pagination via `Link` header, `list_org_repos("storytold")`, `list_releases(repo)`, and streaming asset download.
+- `craft_dl/token.py`: token resolution with the precedence above (runs `gh auth token` via `asyncio.create_subprocess_exec`, tolerating `FileNotFoundError` and non-zero exit).
+- `craft_dl/git_ops.py`: thin async wrapper around the `git` binary (`run_git(args, cwd)` returning stdout, raising a typed `GitError` that carries stderr).
+  Provides `clone`, `fetch_all`, `list_refs`, `update_ref`, `ref_exists`.
+- `craft_dl/backup_refs.py`: builds backup ref names and creates them.
+- `craft_dl/releases.py`: `_releases_` folder setup and release downloading.
+- `craft_dl/report.py`: `ErrorCollector` (repo, step, detail, exception text) plus rendering of the final summary and retry commands.
+- `craft_dl/sync.py`: orchestrates the per-repo pipeline.
+- `tests/`: one test module per module above.
+
+## Per-repo pipeline (`sync.py`)
+
+Repos are processed one after another, so git output and error reports stay readable.
+Release assets within a repo are downloaded concurrently, bounded by an `asyncio.Semaphore`.
+Every step is wrapped so an exception is recorded in the `ErrorCollector` and the pipeline continues with the next step.
+
+1. **Repo list.**
+   Fetch via `GitHubClient`.
+   On failure, record the error and fall back to the directories that already exist under `--repo-dir`, filtered by the same `--app` rules (so `git fetch` of existing checkouts still runs).
+   Release downloading is skipped in that mode, since there's nothing to ask GitHub for.
+2. **Clone or fetch** (`--dl=repo`).
+   - Missing `${repo_dir}/${name}`: `git clone https://github.com/storytold/${name}.git`.
+   - Existing: `git fetch --all --tags --force`, which accepts forced pushes and moved tags, deliberately without `--prune` so deleted upstream branches stay recoverable.
+3. **Backup refs** (`--dl=repo`, right after step 2, also after a fresh clone).
+   Enumerate `refs/remotes/*` (skipping `HEAD`) and `refs/tags/*`.
+   For every ref whose commit has no `bak/commit/{sha1}` yet, create:
+   - `bak/branch/{name}/{YYYY-MM-DD}/{HH-MM-SS}/{commit}` for a branch, `bak/tag/{name}/{YYYY-MM-DD}/{HH-MM-SS}/{commit}` for a tag (`name` may contain slashes), and
+   - `bak/commit/{sha1}`.
+
+   Using the absence of `bak/commit/{sha}` as the "new or changed" test is idempotent and needs no before/after snapshot, so reruns and first clones behave the same, and a force-pushed branch is picked up because its new tip has no backup yet.
+   The old tip stays reachable through its earlier `bak/*` refs, which is what makes force pushes recoverable.
+   Refs are written as local branches (`refs/heads/bak/...`) via `git update-ref`, so they survive `git fetch` and `git gc`.
+   Local `bak/*` branches are excluded from enumeration so backups are never backed up.
+   Annotated tags are peeled (`<tag>^{commit}`) to get the commit sha.
+   Timestamp uses the time of the backup run, in UTC.
+4. **`_releases_` setup** (`--dl=release`, only if the checkout exists).
+   `Path.mkdir(parents=True, exist_ok=True)` for `${repo}/_releases_`, then write `.gitignore` containing just `*` if it doesn't exist yet.
+5. **Releases** (`--dl=release`).
+   For each release from the API into `_releases_/${tag_name}/`:
+   - Write `README.md` as `# {release name}` followed by the release notes body; always rewritten, because notes can be edited upstream.
+   - Download every entry of `assets` (GitHub's auto-generated source archives are not in `assets`, so they are naturally excluded).
+     Skip an asset if a file of the same name and size already exists, otherwise stream to `name.part` and rename on success, so a failed download never leaves a truncated file behind.
+   - Tag names are validated against `..` and absolute paths before being used as a path.
+   - Drafts and prereleases are included when the API returns them.
+   - One failed asset is recorded and the other assets of the release and the other releases proceed.
+
+## Error reporting and retries
+
+`ErrorCollector` stores `(repo, step, detail)`.
+At the end, print a grouped summary, and then one retry command per failing repo covering only the steps that failed, e.g.
+`uv run craft_dl download --dl=release --app=photocraft --app=cadcraft`.
+Repo-list or unresolved-name failures print the plain `uv run craft_dl` command.
+Exit code is `0` when there were no errors and `1` otherwise, so cron/CI can notice partial failures.
+Output uses `logging` (not bare prints) for progress, and `print` only for the final summary.
+
+## Tests (pytest, `tests/`)
+
+- `selection`: comma/repeat parsing, `*` vs `**`, suffix-implied-then-bare fallback (`photo` -> `photocraft`, `craft-fonts`, unknown names).
+- `token`: precedence flag > gh > env > none, with `gh` missing and failing.
+- `backup_refs`: ref name construction (slashes in names, UTC time formatting) and idempotence, using a real temporary git repo; simulate a force push and assert the old tip stays reachable via `bak/*`.
+- `git_ops` / `sync`: clone-vs-fetch decision using a local bare repo as the "remote"; one failing step does not stop the others.
+- `releases`: `respx`-mocked API and downloads, covering `.gitignore` creation, README content, skip-existing, `.part` cleanup on failure.
+- `report`: retry command generation.
+
+## Docs
+
+Update `README.md` with usage examples (`--dl`, `--app`, `--repo-dir`, `--github-token`, `*` and `**`, the retry flow), and the `bak/*` ref layout with a short "recover a force-pushed branch" example.
+
+## Verification
+
+1. `uv sync && uv run pytest` passes.
+2. `uv run craft_dl --repo-dir=$(mktemp -d) --app=photo`: clones `photocraft`, shows `bak/branch/…`, `bak/tag/…`, `bak/commit/…` in `git branch --list 'bak/*'`, creates `_releases_/.gitignore` containing `*`, and `_releases_/v0.5.0/` holds `README.md` (`# PhotoCraft v0.5.0`), the assets and `SHA256SUMS.txt`.
+3. Rerun the same command: no new downloads, no duplicate backup refs.
+4. In the clone, rewind a branch on the local copy of the remote (or use the test fixture) and rerun: the old tip remains reachable via a `bak/*` ref.
+5. Failure paths: run with no network (or a bogus `--github-token` plus blocked API) and confirm existing checkouts still get `git fetch`, the summary lists the errors, the printed retry command works, and the exit code is `1`.
+6. `uv run craft_dl --app='**' --dl=repo` iterates every `storytold` repo.
+
+## Notes
+
+- Matching `craft` in the name also picks up repos like `artcraft`, `artcraftx`, `placeholder-artcraft`, `photocraft-corpus`, `craft-fonts` (all are currently in the org); this follows the spec literally.
+- Unauthenticated GitHub API is limited to 60 requests/hour, which a full run of releases per repo can approach, hence the token support.
