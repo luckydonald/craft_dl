@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 
 from craft_dl.models import AssetInfo, Dl, ReleaseInfo
+from craft_dl.progress import FileTracker
 from craft_dl.report import ErrorCollector
 
 logger = logging.getLogger(__name__)
@@ -70,7 +71,9 @@ def write_readme(directory: Path, release: ReleaseInfo) -> None:
 # end def
 
 
-async def download_asset(http: httpx.AsyncClient, asset: AssetInfo, directory: Path) -> bool:
+async def download_asset(
+    http: httpx.AsyncClient, asset: AssetInfo, directory: Path, open_file: Callable[[str, int], FileTracker] | None = None,
+) -> bool:
     """Returns `False` if skipped because an identical-size file exists. Never leaves a truncated file at the final name."""
     if Path(asset.name).name != asset.name:
         raise ValueError(f"unsafe asset name {asset.name!r}")
@@ -82,18 +85,25 @@ async def download_asset(http: httpx.AsyncClient, asset: AssetInfo, directory: P
     # end if
     logger.info("%s: downloading %.1f MiB", asset.name, asset.size / 1024 / 1024)
     partial = target.with_name(target.name + ".part")
+    tracker = open_file(asset.name, asset.size) if open_file is not None else None
     try:
         async with http.stream("GET", asset.url) as response:
             response.raise_for_status()
             with partial.open("wb") as file:
                 async for chunk in response.aiter_bytes():
                     file.write(chunk)
+                    if tracker is not None:
+                        tracker.advance(len(chunk))
+                    # end if
                 # end for
             # end with
         # end with
         partial.replace(target)
     finally:
         partial.unlink(missing_ok=True)
+        if tracker is not None:
+            tracker.close()
+        # end if
     # end try
     return True
 # end def
@@ -102,6 +112,7 @@ async def download_asset(http: httpx.AsyncClient, asset: AssetInfo, directory: P
 async def sync_release(
     repo: str, release: ReleaseInfo, root: Path, http: httpx.AsyncClient, errors: ErrorCollector,
     semaphore: asyncio.Semaphore, add_work: Callable[[int], None], work_done: Callable[[int], None],
+    open_file: Callable[[str, int], FileTracker] | None = None,
 ) -> None:
     add_work(1 + len(release.assets))
     logger.info("%s %s: writing README.md, %d asset(s) to download", repo, release.tag, len(release.assets))
@@ -118,7 +129,7 @@ async def sync_release(
     async def fetch(asset: AssetInfo) -> None:
         async with semaphore:
             try:
-                if await download_asset(http, asset, directory):
+                if await download_asset(http, asset, directory, open_file):
                     logger.info("%s %s: downloaded %s", repo, release.tag, asset.name)
                 # end if
             except (httpx.HTTPError, OSError, ValueError) as error:

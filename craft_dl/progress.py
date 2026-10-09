@@ -1,18 +1,81 @@
+import time
+from collections import deque
+from dataclasses import dataclass
+from typing import Protocol
+
 from rich.console import Console
-from rich.progress import BarColumn, Progress, TaskID, TaskProgressColumn, TextColumn, TimeElapsedColumn
+from rich.progress import BarColumn, Progress, ProgressColumn, Task, TaskID, TaskProgressColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
+from rich.text import Text
+
+SPEED_WINDOW_SECONDS = 5.0
+DETAIL_INTERVAL_SECONDS = 0.25
+
+
+def human_bytes(count: float) -> str:
+    size = float(count)
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if size < 1024 or unit == "GiB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.2f} {unit}"
+        # end if
+        size /= 1024
+    # end for
+    return f"{size:.2f} GiB"
+# end def
+
+
+class DetailColumn(ProgressColumn):
+    """Free text for the repo rows (git phase, aggregate download speed); `x/y · speed` for the per-file rows."""
+
+    def render(self, task: Task) -> Text:
+        if task.fields.get("bytes"):
+            speed = f" · {human_bytes(task.speed)}/s" if task.speed else ""
+            return Text(f"{human_bytes(task.completed)}/{human_bytes(task.total or 0)}{speed}")
+        # end if
+        return Text(str(task.fields.get("detail", "")))
+    # end def
+# end class
+
+
+class FileTracker(Protocol):
+    def advance(self, count: int) -> None: ...
+
+    def close(self) -> None: ...
+# end class
+
+
+@dataclass
+class FileBar:
+    """Progress row of one file being downloaded; removed again when it is done."""
+
+    bars: "Bars"
+    task: TaskID
+
+    def advance(self, count: int) -> None:
+        self.bars.progress.advance(self.task, count)
+        self.bars.record_bytes(count)
+    # end def
+
+    def close(self) -> None:
+        self.bars.progress.remove_task(self.task)
+        self.bars.active_files -= 1
+    # end def
+# end class
 
 
 class Bars:
-    """Two bars: overall (repos) and in-repo (steps and release assets)."""
+    """Overall (repos), in-repo (steps and release assets), plus one row per file in flight; all with speed/ETA where known."""
 
     def __init__(self, console: Console | None = None, enabled: bool = True) -> None:
         self.progress = Progress(
-            TextColumn("{task.description:<28}"), BarColumn(), TaskProgressColumn(), TimeElapsedColumn(), TextColumn("{task.fields[detail]}"),
+            TextColumn("{task.description:<28}"), BarColumn(), TaskProgressColumn(), TimeElapsedColumn(), TimeRemainingColumn(), DetailColumn(),
             console=console, disable=not enabled,
         )
         self.overall: TaskID = self.progress.add_task("all repositories", total=0, detail="")
         self.current: TaskID = self.progress.add_task("-", total=0, visible=False, detail="")
         self.done = 0
+        self.active_files = 0
+        self.samples: deque[tuple[float, int]] = deque()
+        self.last_detail = 0.0
     # end def
 
     def __enter__(self) -> "Bars":
@@ -50,5 +113,35 @@ class Bars:
 
     def finish_repo(self) -> None:
         self.progress.advance(self.overall)
+    # end def
+
+    def file(self, name: str, total: int) -> FileBar:
+        """A row for one download; shows `done/total · speed` and its own ETA."""
+        label = name if len(name) <= 25 else "…" + name[-24:]
+        self.active_files += 1
+        task = self.progress.add_task(f"  {label}", total=total, bytes=True, detail="")
+        return FileBar(self, task)
+    # end def
+
+    def speed(self, now: float | None = None) -> float:
+        """Bytes per second over the last few seconds, over all files in flight."""
+        now = time.monotonic() if now is None else now
+        while self.samples and now - self.samples[0][0] > SPEED_WINDOW_SECONDS:
+            self.samples.popleft()
+        # end while
+        if not self.samples:
+            return 0.0
+        # end if
+        span = max(now - self.samples[0][0], 1.0)
+        return sum(count for _, count in self.samples) / span
+    # end def
+
+    def record_bytes(self, count: int, now: float | None = None) -> None:
+        now = time.monotonic() if now is None else now
+        self.samples.append((now, count))
+        if now - self.last_detail >= DETAIL_INTERVAL_SECONDS:
+            self.last_detail = now
+            self.progress.update(self.current, detail=f"{self.active_files} file(s) · {human_bytes(self.speed(now))}/s")
+        # end if
     # end def
 # end class

@@ -200,3 +200,5 @@ replicate that in python, with a separate `smb.py` file: `if smb.has_protocol(pa
 
 ❯ If you're downloading releases (not `--dl=app`), symlink `latest` to the latest release's folder. This should be done independently of actually having to download any new releases.
 
+❯ The release download progress bar should have a third progress bar for the current file, and should also show speed per second. Both git dl (which already has speed per second) and release + single file bars should show an estimated remaining time.
+

@@ -178,7 +178,7 @@ async def sync_releases(name: str, ctx: Context) -> None:
     logger.info("%s: %d of %d release(s) selected", name, len(releases), len(listing.releases))
     ctx.bars.work_done()
     await asyncio.gather(*(
-        sync_release(name, release, root, ctx.http, ctx.errors, ctx.semaphore, ctx.bars.add_work, ctx.bars.work_done)
+        sync_release(name, release, root, ctx.http, ctx.errors, ctx.semaphore, ctx.bars.add_work, ctx.bars.work_done, ctx.bars.file)
         for release in releases
     ))
     if listing.latest_tag is not None:
