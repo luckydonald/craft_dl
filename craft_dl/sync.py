@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -9,6 +9,8 @@ import httpx
 
 from craft_dl import git_ops
 from craft_dl.backup_refs import backup_refs
+from craft_dl.chain import Selector
+from craft_dl.filtering import CliMode, matching_selectors, missing_releases, select_assets, unmatched_selectors, wants_latest
 from craft_dl.github import ORG, ReleaseSource
 from craft_dl.models import Dl, ReleaseInfo
 from craft_dl.progress import Bars
@@ -34,6 +36,16 @@ class Context:
     http: httpx.AsyncClient | None = None
     clock: Callable[[], datetime] = utc_now
     semaphore: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(CONCURRENT_DOWNLOADS))
+    selectors: dict[str, list[Selector]] = field(default_factory=dict)
+    cli_mode: CliMode = CliMode.both
+# end class
+
+
+@dataclass
+class Listing:
+    releases: list[ReleaseInfo] = field(default_factory=list)
+    latest_tag: str | None = None
+    complete: bool = True
 # end class
 
 
@@ -77,26 +89,61 @@ async def sync_git(name: str, ctx: Context) -> None:
 # end def
 
 
-async def list_all_releases(name: str, ctx: Context) -> list[ReleaseInfo]:
+async def fetch_latest(name: str, ctx: Context) -> ReleaseInfo | None:
+    assert ctx.source is not None
+    try:
+        return await ctx.source.latest_release(name)
+    except Exception as error:
+        ctx.errors.add(name, Dl.release, "latest release", error)
+        return None
+    # end try
+# end def
+
+
+async def list_all_releases(name: str, ctx: Context, want_latest: bool) -> Listing:
     """All releases, or at least `latest` if listing them fails."""
     assert ctx.source is not None
-    releases: list[ReleaseInfo] = []
+    listing = Listing()
+    latest = await fetch_latest(name, ctx) if want_latest else None
     try:
         async for release in ctx.source.list_releases(name):
-            releases.append(release)
+            listing.releases.append(release)
         # end for
     except Exception as error:  # githubkit raises its own exception hierarchy on top of httpx's
+        listing.complete = False
         ctx.errors.add(name, Dl.release, "list releases", error)
-        try:
-            latest = await ctx.source.latest_release(name)
-            if all(r.tag != latest.tag for r in releases):
-                releases.append(latest)
-            # end if
-        except Exception as latest_error:
-            ctx.errors.add(name, Dl.release, "latest release", latest_error)
-        # end try
+        if latest is None and not want_latest:
+            latest = await fetch_latest(name, ctx)
+        # end if
+        if latest is not None and all(r.tag != latest.tag for r in listing.releases):
+            listing.releases.append(latest)
+        # end if
     # end try
-    return releases
+    listing.latest_tag = latest.tag if latest is not None else None
+    return listing
+# end def
+
+
+def filter_releases(name: str, listing: Listing, ctx: Context) -> list[ReleaseInfo]:
+    """Drops releases no selector asks for and reduces the others to the wanted assets."""
+    selectors = ctx.selectors.get(name, [])
+    if listing.complete:
+        for value in missing_releases(selectors, [r.tag for r in listing.releases], listing.latest_tag):
+            ctx.errors.add(name, Dl.release, "select release", f"release {value!r} not found")
+        # end for
+    # end if
+    chosen: list[ReleaseInfo] = []
+    for release in listing.releases:
+        matched = matching_selectors(selectors, release.tag, listing.latest_tag)
+        if selectors and not matched:
+            continue
+        # end if
+        for selector in unmatched_selectors(matched, release.assets):
+            logger.warning("%s %s: no asset matches platform=%s variant=%s", name, release.tag, selector.platforms or "*", selector.variants or "*")
+        # end for
+        chosen.append(replace(release, assets=select_assets(matched, release.assets, ctx.cli_mode)))
+    # end for
+    return chosen
 # end def
 
 
@@ -112,7 +159,8 @@ async def sync_releases(name: str, ctx: Context) -> None:
         ctx.bars.work_done()
         return
     # end if
-    releases = await list_all_releases(name, ctx)
+    listing = await list_all_releases(name, ctx, wants_latest(ctx.selectors.get(name, [])))
+    releases = filter_releases(name, listing, ctx)
     ctx.bars.work_done()
     await asyncio.gather(*(
         sync_release(name, release, root, ctx.http, ctx.errors, ctx.semaphore, ctx.bars.add_work, ctx.bars.work_done)
@@ -136,7 +184,7 @@ async def sync_repo(name: str, ctx: Context) -> None:
 
 
 async def run(
-    apps: Sequence[str], ctx: Context, list_names: Callable[[], Awaitable[list[str]]],
+    apps: Sequence[str], ctx: Context, list_names: Callable[[], Awaitable[list[str]]], chain: Sequence[Selector] = (),
 ) -> None:
     """If the repo list can't be fetched, still run `git fetch` in the existing checkouts."""
     offline = False
@@ -153,6 +201,11 @@ async def run(
     resolved, unresolved = resolve_apps(apps, names)
     for app in unresolved:
         ctx.errors.add(None, None, "resolve app", f"no repository matches {app!r}")
+    # end for
+    for selector in chain:
+        for name in resolve_apps(selector.apps, names)[0]:
+            ctx.selectors.setdefault(name, []).append(selector)
+        # end for
     # end for
     ctx.bars.set_repo_count(len(resolved))
     for name in resolved:

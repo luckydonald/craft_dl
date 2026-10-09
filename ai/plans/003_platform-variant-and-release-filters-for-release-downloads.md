@@ -16,8 +16,12 @@ Decisions confirmed with the user:
   A variant without a platform in its group matches across all platforms.
 - `*.app.tar.gz` counts as `mac`, so plain `--platform=mac` also includes it.
   The example in the request was wrong about excluding it, and about including `photocraft-cli-…-macos-universal.zip` for `--variant=dmg,flatpak,aarch64` (no platform in that group, so the CLI zip does not match).
-- `aarch64` and `arm64` are *not* aliases for now (literal tokens), matching the example, which excludes `windows-arm64`.
-  The alias table lives in one place (`assets.py`), so adding `arm64 = aarch64`, `m1`/`m2`/`apple-silicon`, or `universal` implications later is a one-line change.
+- CPU architectures are canonicalized through one alias table in `assets.py`, because it is the same technology under different names:
+  - `arm64` = `aarch64` = `armv8` = `m1`, `m2`, `m3`, … (`m<digits>`) = `apple-silicon` = `apple-chip`.
+  - `x64` = `x86_64` = `x86-64` = `amd64` = `intel` (an Intel Mac is `x64`).
+  - `x86` = `i386` = `i686` = `ia32` (32-bit, distinct from `x64`).
+  - `universal` is the macOS fat binary and *implies* both `arm64` and `x64`: `--variant=arm64` (or `m1`) also selects `…universal.dmg`, `…universal.app.tar.gz` and `…macos-universal.zip`, while `--variant=universal` selects only the universal builds themselves.
+  - Consequence: `--variant=aarch64` without a platform also matches `windows-arm64` files (the original example wrongly excluded them); add `--platform=linux` to narrow it.
 - A new `--dl-cli` switch controls assets that contain `-cli-` in their name (e.g. `photocraft-cli-0.5.0-macos-universal.zip`).
 - Unit-test matrices run the flags against the asset names of all currently released versions (see Tests).
 
@@ -45,7 +49,7 @@ Chain semantics, using the corrected version of the user's example:
 Groups: `(art, [v0.41.0, latest], win, [msi])`, `(art, [v0.41.0, latest], mac, [])`, `(photo, [v0.5.0], -, [dmg, flatpak, aarch64])`.
 Downloads (plus `README.md` and `SHA256SUMS.txt` where present):
 - `artcraft-v0.41.0`: `ArtCraft_0.41.0_x64_en-US.msi`, `ArtCraft_0.41.0_universal.dmg`, `ArtCraft_universal.app.tar.gz`; not `ArtCraft_0.41.0_x64-setup.exe`.
-- `photocraft` `v0.5.0`: `…macos-universal.dmg`, both `…linux-*.flatpak`, and the `linux-aarch64` `AppImage`, `AppImage.zsync`, `deb`, `rpm`, `tar.gz`; nothing from `windows-arm64`, `freebsd`, `x86_64` (other than flatpak), `web`, or the CLI zip.
+- `photocraft` `v0.5.0` (corrected for the arch aliases): `…macos-universal.dmg`, `photocraft-cli-…-macos-universal.zip` (universal implies `aarch64`), both `…linux-*.flatpak`, the `linux-aarch64` `AppImage`, `AppImage.zsync`, `deb`, `rpm`, `tar.gz`, and the `windows-arm64` `.msi` and `-portable.zip`; nothing from `freebsd`, `x86_64` (other than the flatpak), `x64`/`x86` windows, or `web`.
 
 Rules for the chain parser:
 - `--app=a,b` gives the following filters to both apps.
@@ -61,9 +65,12 @@ Cyclopts parses each list option separately and loses the interleaving order, so
 - `craft_dl/chain.py` (new): `Selector` frozen dataclass `(apps: tuple[str, ...], releases, platforms, variants)` and `parse_chain(tokens: Sequence[str]) -> list[Selector]`, a small state machine over `--app/--release/--platform/--variant` in both `--opt=value` and `--opt value` form.
   Also `selector_args(selectors)` that renders a repo's selectors back into CLI arguments, for retry commands.
 - `craft_dl/assets.py` (new): pure functions.
-  - `tokens(name)`: lowercase, normalize known compounds first (`x86_64`/`x86-64`/`amd64` become one token so `x86` does not match `x86_64`; `en-us`), then split on non-alphanumerics.
+  - `tokens(name)`: lowercase, normalize known compounds first (`x86_64`/`x86-64` become one token so `x86` does not match `x86_64`; `en-us`; `apple-silicon`, `apple-chip`), then split on non-alphanumerics.
+    The same normalization runs on `--variant`/`--platform` values *before* they are split on dashes.
+  - `ARCH_ALIASES` and `archs_of(name)`: map the tokens of an asset to canonical architectures (`arm64`, `x64`, `x86`, `universal`).
+    `variant_matches(variant, name)` treats an architecture variant as satisfied when the asset has that architecture, or is `universal` and the variant is `arm64` or `x64`; all other variant tokens are plain token membership.
   - `platform_of(name)`: from tokens (`windows|win`, `macos|mac|darwin|osx`, `linux`, `freebsd`), falling back to extension (`msi|exe` is windows, `dmg|pkg|app.tar.gz` is mac, `deb|rpm|appimage|flatpak|snap` is linux), else `None` (e.g. `photocraft-web-0.5.0.zip`, matched only when no platform filter is given).
-  - `PLATFORM_ALIASES`, `VARIANT_ALIASES` (empty for now), `is_cli(name)` (token `cli`), `is_checksum(name)` (`sha256sums`, `checksums`, `*.sha256`, `*.sha512`).
+  - `PLATFORM_ALIASES`, `is_cli(name)` (token `cli`), `is_checksum(name)` (`sha256sums`, `checksums`, `*.sha256`, `*.sha512`).
 - `craft_dl/filtering.py` (new): `CliMode` enum with the spelling table and parser, `release_matches(selector, tag, latest_tag)` (compares the version part of the tag; exact tag also matches), `asset_matches(selector, name)`, and `select_assets(selectors, release, cli_mode, latest_tag) -> list[AssetInfo]` which always keeps checksum files of matched releases.
 - `craft_dl/cli.py`: add `release`, `platform`, `variant` (list options, for validation and `--help`) and `dl_cli`; build the chain from the raw argv via `cli.parse_args(tokens)` and pass it to the command through a non-parsed parameter (`Parameter(parse=False)`).
   If that cyclopts hook turns out unavailable in the installed version, fall back to `main()` calling `parse_chain(sys.argv[1:])` and handing the result to `download_async`.
@@ -89,8 +96,10 @@ Cyclopts parses each list option separately and loses the interleaving order, so
 ### Matrix tests (`tests/test_matrix.py`, parametrized over the snapshot)
 
 - **Every asset is classifiable:** for each asset in the snapshot, `platform_of` returns a platform, except an explicit allow-list (`*-web-*.zip`, checksum files); a new unknown naming scheme fails the test and must be added consciously.
-- **Every documented flag matches something:** a table of all documented platforms (`win`, `windows`, `apple`, `mac`, `macos`, `osx`, `darwin`, `linux`, `freebsd`, `bsd`) and all documented variants and compound forms (`msi`, `exe`, `setup`, `portable`, `dmg`, `deb`, `rpm`, `appimage`, `flatpak`, `tar-gz`, `zip`, `x64`, `x86`, `x86_64`, `aarch64`, `arm64` (expected to match only if the snapshot has such files; marked `xfail` otherwise), `universal`, `win-portable`, `win-x64`, `win-setup`, `win-x64-setup`, `mac-universal`, `linux-aarch64`), each parametrized per repo: assert at least one asset of some release matches, or that the pair is listed in an explicit "expected to match nothing" table (e.g. `freebsd` for repos without BSD builds), so a regression that silently matches nothing is caught.
+- **Every documented flag matches something:** a table of all documented platforms (`win`, `windows`, `apple`, `mac`, `macos`, `osx`, `darwin`, `linux`, `freebsd`, `bsd`) and all documented variants and compound forms (`msi`, `exe`, `setup`, `portable`, `dmg`, `deb`, `rpm`, `appimage`, `flatpak`, `tar-gz`, `zip`, `x64`, `x86`, `x86_64`, `amd64`, `intel`, `aarch64`, `arm64`, `m1`, `m2`, `apple-silicon`, `apple-chip`, `i386`, `universal`, `win-portable`, `win-x64`, `win-setup`, `win-x64-setup`, `mac-universal`, `linux-aarch64`), each parametrized per repo: assert at least one asset of some release matches, or that the pair is listed in an explicit "expected to match nothing" table (e.g. `freebsd` for repos without BSD builds), so a regression that silently matches nothing is caught.
 - **Platform × variant cross matrix:** for every (platform, variant) pair, the selection equals the brute-force result of `platform_of(name) == platform and variant tokens ⊆ tokens(name)`, which cross-checks the selection pipeline against the primitives for all released names.
+- **Architecture alias equivalence:** `aarch64`, `arm64`, `m1`, `m2`, `apple-silicon`, `apple-chip` select identical sets for every repo, likewise `x64`, `x86_64`, `amd64`, `intel`, and `x86`, `i386`, `ia32`; `x86` never selects an `x86_64`/`x64` file and the reverse.
+- **Universal implication:** for every repo with macOS builds, `arm64` and `x64` selections are supersets of the `universal` selection restricted to mac, `--variant=universal` selects no Linux/Windows file, and `--platform=win --variant=aarch64` selects only `windows-arm64` files (precisely the files whose name contains `arm64` or `aarch64` and are windows).
 - **Alias equivalence:** `win`/`windows`, `mac`/`macos`/`apple`/`osx`/`darwin`, and `--platform=win --variant=x64` vs. `--platform=win-x64` select identical sets for every repo.
 - **Invariants over all releases:** checksum files are always selected for a matched release; `--dl-cli=app` never returns an asset with `-cli-`, `--dl-cli=cli-only` returns only those, `both` is their union; selecting `win` ∪ `mac` ∪ `linux` ∪ `freebsd` ∪ unclassified equals all assets (nothing lost, nothing double-counted by accident).
 - **Release matching matrix:** every tag in the snapshot is matched by its own exact tag and by its bare version (`0.41.0`, `v0.41.0`); split releases (`artcraft-windows-v0.5.0` and `artcraft-v0.5.0`) both match `v0.5.0`; `latest` matches exactly the tag given as latest.
@@ -112,5 +121,6 @@ Cyclopts parses each list option separately and loses the interleaving order, so
 
 ## Notes
 
-- Not covered on purpose: fuzzy matching of misspelled variants, and architecture aliases (see the decision above).
+- Not covered on purpose: fuzzy matching of misspelled variants (a warning names filters that matched nothing).
+- The architecture alias table is deliberately one data structure, so a new naming scheme (say `riscv64`, `armv7`) is a one-line addition plus a snapshot refresh.
 - Existing behavior without any new option is unchanged.
