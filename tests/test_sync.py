@@ -4,6 +4,7 @@ from pathlib import Path
 import httpx
 import respx
 
+from craft_dl import git_ops
 from craft_dl.models import AssetInfo, Dl, ReleaseInfo
 from craft_dl.progress import Bars
 from craft_dl.report import ErrorCollector
@@ -67,8 +68,6 @@ async def test_listing_failure_falls_back_to_latest(tmp_path: Path) -> None:
 
 
 async def test_offline_still_fetches_existing_checkouts(remote: Path, tmp_path: Path) -> None:
-    from craft_dl import git_ops
-
     await git_ops.clone(str(remote), tmp_path / "fakecraft")
     errors = ErrorCollector()
     ctx = Context(repo_dir=tmp_path, dl={Dl.repo, Dl.release}, errors=errors, bars=Bars(enabled=False))

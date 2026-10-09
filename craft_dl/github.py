@@ -3,6 +3,7 @@ from typing import Protocol
 
 import httpx
 from githubkit import GitHub
+from githubkit_schemas.latest.models import Release
 
 from craft_dl.models import AssetInfo, ReleaseInfo
 
@@ -16,7 +17,7 @@ class ReleaseSource(Protocol):
 # end class
 
 
-def to_release_info(release) -> ReleaseInfo:  # githubkit's generated model, typed per endpoint
+def to_release_info(release: Release) -> ReleaseInfo:
     return ReleaseInfo(
         tag=release.tag_name,
         name=release.name or release.tag_name,

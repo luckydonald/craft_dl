@@ -3,7 +3,7 @@ import pytest
 from craft_dl import token
 
 
-async def test_flag_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_flag_wins() -> None:
     assert await token.resolve_token("flag", {"GITHUB_TOKEN": "env"}) == "flag"
 # end def
 
