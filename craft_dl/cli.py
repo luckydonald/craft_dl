@@ -2,6 +2,7 @@ import asyncio
 import logging
 import sys
 from collections.abc import Sequence
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Annotated
 
@@ -9,7 +10,7 @@ from cyclopts import App, Parameter
 from rich.console import Console
 from rich.logging import RichHandler
 
-from craft_dl import smb
+from craft_dl import smb, webdav
 from craft_dl.chain import ChainError, Selector, chain_apps, parse_chain
 from craft_dl.filtering import CliMode, parse_cli_mode
 from craft_dl.github import GitHubClient
@@ -17,6 +18,7 @@ from craft_dl.models import Dl
 from craft_dl.progress import Bars
 from craft_dl.report import ErrorCollector
 from craft_dl.selection import is_wildcard, split_values
+from craft_dl.store import Store
 from craft_dl.sync import Context, run
 from craft_dl.token import resolve_token
 
@@ -57,22 +59,54 @@ def parse_filters(tokens: Sequence[str], dl_cli: str) -> tuple[list[Selector], C
 
 
 async def download_async(
-    dl: set[Dl], chain: list[Selector], cli_mode: CliMode, repo_dir: Path, github_token: str | None, console: Console,
+    dl: set[Dl], chain: list[Selector], cli_mode: CliMode, repo_dir: Path, download_dir: Path | webdav.WebdavLocation | None,
+    github_token: str | None, console: Console,
 ) -> int:
     errors = ErrorCollector()
     logger.info("Resolving the GitHub token (--github-token, gh auth token, $GITHUB_TOKEN)…")
     token = await resolve_token(github_token)
     logger.info("Using %s", "an API token" if token else "no API token (rate limits apply)")
     client = GitHubClient(token)
-    with Bars(console) as bars:
-        async with client.http_client() as http:
-            ctx = Context(repo_dir=repo_dir, dl=dl, errors=errors, bars=bars, source=client, http=http, cli_mode=cli_mode)
-            await run(chain_apps(chain), ctx, client.list_org_repos, chain)
+    async with AsyncExitStack() as stack:
+        if isinstance(download_dir, webdav.WebdavLocation):
+            dav = await stack.enter_async_context(download_dir.client())  # dedicated client: its credentials must not go to GitHub
+            target: Path | Store | None = webdav.WebdavStore(download_dir.base_url, dav)
+        else:
+            target = download_dir
+        # end if
+        with Bars(console) as bars:
+            async with client.http_client() as http:
+                ctx = Context(repo_dir=repo_dir, dl=dl, errors=errors, bars=bars, source=client, http=http, cli_mode=cli_mode, download_dir=target)
+                await run(chain_apps(chain), ctx, client.list_org_repos, chain)
+            # end with
         # end with
-    # end with
+    # end async with
     extra_args = [] if cli_mode is CliMode.both else [f"--dl-cli={cli_mode.value}"]
     print(errors.render(ctx.selectors, extra_args))
     return 1 if errors.failures else 0
+# end def
+
+
+def resolve_dir(path: Path, option: str, *, allow_webdav: bool) -> Path | webdav.WebdavLocation:
+    path = path.expanduser()
+    if smb.has_protocol(path):
+        try:
+            return smb.mount(path)
+        except smb.SmbError as error:
+            raise SystemExit(str(error)) from error
+        # end try
+    # end if
+    if webdav.has_protocol(path):
+        if not allow_webdav:
+            raise SystemExit(f"invalid {option}: git needs a local directory, use --download-dir for webdav")
+        # end if
+        try:
+            return webdav.parse(path)
+        except webdav.WebdavError as error:
+            raise SystemExit(f"invalid {option}: {error}") from error
+        # end try
+    # end if
+    return path
 # end def
 
 
@@ -86,7 +120,8 @@ def download(
     platform: Annotated[list[str], Parameter(help="Only this platform of the preceding `--release`: `win`, `mac` (`apple`, `macos`), `linux`, `freebsd`. `win-x64-setup` adds variants.")] = [],
     variant: Annotated[list[str], Parameter(help="Only these variants (`msi`, `dmg`, `x64`, `aarch64`, `m1`, `portable`, `x64-setup`, …), alternatives; dashes combine.")] = [],
     dl_cli: Annotated[str, Parameter(help="Assets containing `-cli-`: `both` (default), `app` (skip them), `cli-only`. Also `yes/no/only`, `ja/nein/nur`, `1/0/-1`.")] = "both",
-    repo_dir: Annotated[Path, Parameter(help="Where the repositories live; `smb://<server>/<mount>/<dir>` is mounted first (macOS).")] = DEFAULT_REPO_DIR,
+    repo_dir: Annotated[Path, Parameter(help="Where the git repositories live; `smb://<server>/<mount>/<dir>` is mounted first (macOS).")] = DEFAULT_REPO_DIR,
+    download_dir: Annotated[Path | None, Parameter(help="Where the releases go, default: `--repo-dir`. Also `smb://…`, or `webdavs://<user>:<password>@<host>/<dir>` (percent-escaped), read/written directly.")] = None,
     github_token: Annotated[str | None, Parameter(help="Overrides `gh auth token` and `$GITHUB_TOKEN`.")] = None,
     tokens: Annotated[Sequence[str] | None, Parameter(parse=False)] = None,
 ) -> int:
@@ -97,15 +132,10 @@ def download(
     """
     chain, cli_mode = parse_filters(sys.argv[1:] if tokens is None else tokens, dl_cli)
     console = setup_logging()
-    repo_dir = repo_dir.expanduser()
-    if smb.has_protocol(repo_dir):
-        try:
-            repo_dir = smb.mount(repo_dir)
-        except smb.SmbError as error:
-            raise SystemExit(str(error)) from error
-        # end try
-    # end if
-    return asyncio.run(download_async(parse_dl(dl), chain, cli_mode, repo_dir, github_token, console))
+    local_repo_dir = resolve_dir(repo_dir, "--repo-dir", allow_webdav=False)
+    assert isinstance(local_repo_dir, Path)
+    target = None if download_dir is None else resolve_dir(download_dir, "--download-dir", allow_webdav=True)
+    return asyncio.run(download_async(parse_dl(dl), chain, cli_mode, local_repo_dir, target, github_token, console))
 # end def
 
 

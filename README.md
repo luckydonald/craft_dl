@@ -26,9 +26,16 @@ uv run craft_dl --app='**'                        # every storytold/* repository
     - Falling back to the bare name if not found with the added tail.
   - `*` or `all` (**default**) is every repo named `<word>craft`,
   - `**` or `@storytold` is a special value to download all @storytold repos, not only those matching `*craft`.
-- **`--repo-dir`**: Where those downloads should be placed into.
+- **`--repo-dir`**: Where the git repositories are cloned into.
   - **default**: `~/git/storytold/`.
   - An `smb://{ServerName}._smb._tcp.local/{Mount}/{dir1/dir2}` path is mounted first (macOS, `open smb://…`, waits up to 30 s) and then used as `/Volumes/{Mount}/{dir1/dir2}`.
+  - Must be a local directory: git can't run over WebDAV.
+- **`--download-dir`**: Where the releases (`_releases_/<tag>/`) are saved. **default**: same as `--repo-dir`.
+  - Accepts the same local and `smb://` paths.
+  - A `webdavs://{user}:{password}@{host}[:{port}]/{dir1/dir2}` (or `webdav://` for plain http) is used directly, nothing is mounted.
+    - Percent-escape special characters in user and password, e.g. `escaped%20password`, `%40` for `@`, `%3A` for `:`, `%2F` for `/`.
+    - Missing folders are created one level at a time (`MKCOL` is not recursive), including those in the URL's path. Files are uploaded as `….part` and then moved into place.
+    - WebDAV has no symlinks, so `_releases_/latest.txt` contains the latest tag instead of the `latest` link.
 - **`--github-token`**: Optional token to use with the GitHub API, to prevent/reduce hitting rate limits.
   - if not set, checks `gh auth token` (if installed), or
   - or the environment variable `$GITHUB_TOKEN`.

@@ -7,6 +7,7 @@ import respx
 from craft_dl.models import AssetInfo
 from craft_dl.progress import Bars, DetailColumn, human_bytes
 from craft_dl.releases import download_asset
+from craft_dl.store import LocalStore
 
 
 def test_human_bytes() -> None:
@@ -58,11 +59,11 @@ async def test_download_asset_reports_chunks_and_closes_on_failure(tmp_path: Pat
     respx.get("https://example.test/bad").mock(return_value=httpx.Response(500))
     bars = Bars(enabled=False)
     async with httpx.AsyncClient() as http:
-        assert await download_asset(http, AssetInfo("ok.bin", 6, "https://example.test/ok"), tmp_path, bars.file)
+        assert await download_asset(http, AssetInfo("ok.bin", 6, "https://example.test/ok"), LocalStore(tmp_path), "", bars.file)
         assert sum(count for _, count in bars.samples) == 6
         assert bars.active_files == 0
         with pytest.raises(httpx.HTTPStatusError):
-            await download_asset(http, AssetInfo("bad.bin", 6, "https://example.test/bad"), tmp_path, bars.file)
+            await download_asset(http, AssetInfo("bad.bin", 6, "https://example.test/bad"), LocalStore(tmp_path), "", bars.file)
         # end with
     # end with
     assert bars.active_files == 0

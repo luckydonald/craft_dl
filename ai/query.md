@@ -268,3 +268,14 @@ git clone: remote: Enumerating objects: 303072, done.
 > </details>
 >
 
+❯ Plan accepted, auto mode.
+
+❯ MKCOL is not recursive
+
+❯ Make it recursively create the folders.
+
+❯ Conversation compacted <kbd>manual</kbd>:
+> - [Result (`10676` chars, `10.4 KB`)](output/compact/002.540ca332-b584-4a27-ae15-ceca47c4e56a/result.md)
+
+❯ Separate download and repo dir
+

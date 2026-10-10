@@ -58,6 +58,23 @@ async def test_releases_without_checkout(tmp_path: Path) -> None:
 
 
 @respx.mock
+async def test_releases_go_to_the_download_dir(tmp_path: Path) -> None:
+    respx.get("https://example.test/a").mock(return_value=httpx.Response(200, content=b"abc"))
+    errors = ErrorCollector()
+    async with httpx.AsyncClient() as http:
+        ctx = Context(
+            repo_dir=tmp_path / "git", dl={Dl.release}, errors=errors, bars=Bars(enabled=False), source=FakeSource(), http=http,
+            download_dir=tmp_path / "dl",
+        )
+        await run(["*"], ctx, names)
+    # end with
+    assert errors.failures == []
+    assert (tmp_path / "dl" / "fakecraft" / "_releases_" / "v1" / "a.bin").read_bytes() == b"abc"
+    assert not (tmp_path / "git" / "fakecraft").exists()
+# end def
+
+
+@respx.mock
 async def test_listing_failure_falls_back_to_latest(tmp_path: Path) -> None:
     respx.get("https://example.test/a").mock(return_value=httpx.Response(200, content=b"abc"))
     errors = ErrorCollector()

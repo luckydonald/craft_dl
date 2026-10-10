@@ -1,7 +1,6 @@
 import asyncio
 import logging
-import os
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
 import httpx
@@ -9,98 +8,60 @@ import httpx
 from craft_dl.models import AssetInfo, Dl, ReleaseInfo
 from craft_dl.progress import FileTracker
 from craft_dl.report import ErrorCollector
+from craft_dl.store import LATEST_LINK, RELEASES_DIR, Store, link_latest, release_dir, safe_relative  # noqa: F401 (re-exported)
+from craft_dl.webdav import WebdavError
 
 logger = logging.getLogger(__name__)
 
-RELEASES_DIR = "_releases_"
-LATEST_LINK = "latest"
 CONCURRENT_DOWNLOADS = 4
 
 
-def ensure_releases_dir(repo_path: Path) -> Path:
+async def ensure_releases_dir(store: Store) -> None:
     """Create `_releases_` (with parents) and its ignore-everything `.gitignore`, without failing if they exist."""
-    root = repo_path / RELEASES_DIR
-    root.mkdir(parents=True, exist_ok=True)
-    gitignore = root / ".gitignore"
-    if not gitignore.exists():
-        gitignore.write_text("*\n")
+    await store.mkdirs(RELEASES_DIR)
+    gitignore = f"{RELEASES_DIR}/.gitignore"
+    if await store.exists_size(gitignore) is None:
+        await store.write_text(gitignore, "*\n")
     # end if
-    return root
 # end def
 
 
-def release_dir(root: Path, tag: str) -> Path:
-    path = (root / tag).resolve()
-    if not path.is_relative_to(root.resolve()) or path == root.resolve():
-        raise ValueError(f"unsafe release tag {tag!r}")
-    # end if
-    return path
-# end def
-
-
-def link_latest(root: Path, tag: str) -> bool:
-    """Points `_releases_/latest` at the latest release's folder (relative link, replaced atomically).
-
-    Returns `False` if that folder doesn't exist (e.g. a filter excluded it) or `latest` is a real folder we must not touch.
-    """
-    directory = release_dir(root, tag)
-    link = root / LATEST_LINK
-    if not directory.is_dir():
-        return False
-    # end if
-    if link.exists() and not link.is_symlink():
-        logger.warning("%s is a real directory, not touching it", link)
-        return False
-    # end if
-    target = os.path.relpath(directory, root.resolve())
-    if link.is_symlink() and os.readlink(link) == target:
-        return True
-    # end if
-    temporary = root / f".{LATEST_LINK}.tmp"
-    temporary.unlink(missing_ok=True)
-    temporary.symlink_to(target, target_is_directory=True)
-    temporary.replace(link)
-    logger.info("%s -> %s", link, target)
-    return True
-# end def
-
-
-def write_readme(directory: Path, release: ReleaseInfo) -> None:
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / "README.md").write_text(f"# {release.name}\n\n{release.body}\n")
+async def write_readme(store: Store, directory: str, release: ReleaseInfo) -> None:
+    await store.mkdirs(directory)
+    await store.write_text(f"{directory}/README.md", f"# {release.name}\n\n{release.body}\n")
 # end def
 
 
 async def download_asset(
-    http: httpx.AsyncClient, asset: AssetInfo, directory: Path, open_file: Callable[[str, int], FileTracker] | None = None,
+    http: httpx.AsyncClient, asset: AssetInfo, store: Store, directory: str, open_file: Callable[[str, int], FileTracker] | None = None,
 ) -> bool:
     """Returns `False` if skipped because an identical-size file exists. Never leaves a truncated file at the final name."""
     if Path(asset.name).name != asset.name:
         raise ValueError(f"unsafe asset name {asset.name!r}")
     # end if
-    target = directory / asset.name
-    if target.exists() and target.stat().st_size == asset.size:
+    target = f"{directory}/{asset.name}" if directory else asset.name
+    if await store.exists_size(target) == asset.size:
         logger.info("%s: already downloaded", asset.name)
         return False
     # end if
     logger.info("%s: downloading %.1f MiB", asset.name, asset.size / 1024 / 1024)
-    partial = target.with_name(target.name + ".part")
     tracker = open_file(asset.name, asset.size) if open_file is not None else None
+
+    async def chunks(response: httpx.Response) -> AsyncIterator[bytes]:
+        async for chunk in response.aiter_bytes():
+            if tracker is not None:
+                tracker.advance(len(chunk))
+            # end if
+            yield chunk
+        # end for
+    # end def
+
     try:
         async with http.stream("GET", asset.url) as response:
             response.raise_for_status()
-            with partial.open("wb") as file:
-                async for chunk in response.aiter_bytes():
-                    file.write(chunk)
-                    if tracker is not None:
-                        tracker.advance(len(chunk))
-                    # end if
-                # end for
-            # end with
+            await store.write_stream(target, chunks(response), asset.size)
         # end with
-        partial.replace(target)
     finally:
-        partial.unlink(missing_ok=True)
         if tracker is not None:
             tracker.close()
         # end if
@@ -110,16 +71,16 @@ async def download_asset(
 
 
 async def sync_release(
-    repo: str, release: ReleaseInfo, root: Path, http: httpx.AsyncClient, errors: ErrorCollector,
+    repo: str, release: ReleaseInfo, store: Store, http: httpx.AsyncClient, errors: ErrorCollector,
     semaphore: asyncio.Semaphore, add_work: Callable[[int], None], work_done: Callable[[int], None],
     open_file: Callable[[str, int], FileTracker] | None = None,
 ) -> None:
     add_work(1 + len(release.assets))
     logger.info("%s %s: writing README.md, %d asset(s) to download", repo, release.tag, len(release.assets))
     try:
-        directory = release_dir(root, release.tag)
-        write_readme(directory, release)
-    except (OSError, ValueError) as error:
+        directory = f"{RELEASES_DIR}/{safe_relative(release.tag)}"
+        await write_readme(store, directory, release)
+    except (OSError, ValueError, WebdavError, httpx.HTTPError) as error:
         errors.add(repo, Dl.release, f"release {release.tag}", error)
         work_done(1 + len(release.assets))
         return
@@ -129,10 +90,10 @@ async def sync_release(
     async def fetch(asset: AssetInfo) -> None:
         async with semaphore:
             try:
-                if await download_asset(http, asset, directory, open_file):
+                if await download_asset(http, asset, store, directory, open_file):
                     logger.info("%s %s: downloaded %s", repo, release.tag, asset.name)
                 # end if
-            except (httpx.HTTPError, OSError, ValueError) as error:
+            except (httpx.HTTPError, OSError, ValueError, WebdavError) as error:
                 errors.add(repo, Dl.release, f"asset {release.tag}/{asset.name}", error)
             # end try
             work_done(1)

@@ -2,50 +2,71 @@
 
 ## Context
 
-`--repo-dir` already accepts `smb://<server>/<mount>/<dir>`, which `craft_dl/smb.py` mounts through macOS Finder (`open smb://…`) before the downloader uses it (commit c947729).
-The request is to accept `webdavs://user:escaped%20password@domain.example.com/some/path` as well, with the credentials percent-escaped in the URL.
-Differences from SMB: the URL carries credentials, there is no share/subpath split (the whole URL path is the directory), and Finder gives no predictable `/Volumes/<name>`.
+`--repo-dir` accepts local paths and, since c947729, `smb://…` (mounted via Finder first).
+The request is to accept `webdavs://user:escaped%20password@domain.example.com/some/path` too, **without mounting**: read and write the server directly, asynchronously, using HTTP range requests where seeking helps.
+Decisions from the user: for a webdavs dir only the release assets are stored there (git sync is skipped with a warning), and `_releases_/latest` becomes a `latest.txt` file holding the tag.
 
 ## Approach
 
-Add `craft_dl/webdav.py`, parallel to `smb.py`, and dispatch to it from `cli.download`.
-Mount with `/sbin/mount_webdav` onto a mount point we choose, so the resulting local path is deterministic.
+Introduce a small async storage layer, so `assets.py` and `sync.py` stop touching `pathlib` directly for release data.
+WebDAV is spoken with the `httpx.AsyncClient` that is already a dependency (via githubkit); no new package.
 
-- `has_protocol(path)`: matches `webdav:/` and `webdavs:/` (case-insensitive), because `Path("webdavs://x")` collapses to `webdavs:/x`, same as in `smb.has_protocol` (`craft_dl/smb.py:48`).
-- `parse(path)` returns a frozen `WebdavPath(scheme, user, password, host, port, path)`.
-  Use `urllib.parse.urlsplit` on the re-expanded `scheme://…` string, and `unquote` the username and password.
-  Raise `WebdavError` when host is missing.
-- `WebdavPath.url` rebuilds `https://host[:port]/path` (`webdavs` → `https`, `webdav` → `http`) without credentials, so they never show up in `ps` or logs.
-- `mount_point`: a user-owned directory, e.g. `~/.cache/craft_dl/webdav/<host>-<short hash of url+user>`, created with `mkdir(parents=True, exist_ok=True)`.
-  `/Volumes` is root-owned, so `smb.VOLUMES` is not reusable here.
-- `mount(path, timeout)`:
-  - Skip if `smb.is_mounted(mount_point)` already says so (reuse `mounted_volumes` / `is_mounted` from `smb.py`, moving them to a small shared helper only if the import looks awkward).
-  - Otherwise run `mount_webdav -i <url> <mount_point>` and feed `user\npassword\n` on stdin, so the password is never in argv.
-  - Reuse `smb.wait_until` for the mount check, and return `mount_point`.
-  - Wrap `OSError` / `CalledProcessError` into `WebdavError`, with the password redacted from any message.
-- Never log the password; log `user@host/path` only.
+### `craft_dl/store.py` (new)
 
-Wire-up in `craft_dl/cli.py:99-108`: extend the existing `if smb.has_protocol(repo_dir)` into a second branch for `webdav.has_protocol`, with the same `SystemExit(str(error))` handling.
-Update the `--repo-dir` help text (`cli.py:89`) and the `README.md:31` paragraph with the new scheme, the escaping rule (`%20`, `%40`, `%3A`, `%2F` in user and password) and the note that the mount lives under `~/.cache/craft_dl/webdav/`.
+A `Store` protocol, all methods `async`, paths relative to the store root (posix strings):
 
-## Open point to verify first
+- `exists_size(path) -> int | None` (size or `None` if missing).
+- `mkdirs(path)`.
+- `write_text(path, text)`.
+- `write_stream(path, chunks: AsyncIterator[bytes], size) -> None`, atomic: no truncated file at the final name.
+- `read(path, start=0, end=None) -> bytes`, a ranged read.
+- `set_latest(tag)` (see below).
 
-Whether `mount_webdav -i` reads username and password from a piped stdin (it is documented as interactive).
-If it insists on a tty, fall back to `open webdavs://user:pass@host/path` and poll `mounted_volumes()` for a `https://host/path` source line to find the mount point.
-Quick manual check against a real WebDAV server before writing the final code.
+`LocalStore(root: Path)` wraps today's behavior: `.part` file then `replace`, the symlink `latest` logic from `link_latest` (`craft_dl/assets.py:41`), and the `release_dir` path-escape check (`assets.py:32`).
+File writes stay synchronous inside the async methods, as they are now.
+
+`WebdavStore(base_url, user, password, client)` in `craft_dl/webdav.py`:
+
+- `parse(path) -> WebdavLocation(base_url, user, password)`.
+  `Path("webdavs://x")` collapses to `webdavs:/x`, so `has_protocol` matches `webdav:/` and `webdavs:/` like `smb.has_protocol` (`craft_dl/smb.py:48`), then re-expands before `urllib.parse.urlsplit`.
+  `unquote` user and password; `base_url` is `https://host[:port]/path` (`webdav` → `http`) with no credentials in it.
+  `WebdavError` for a missing host.
+- Credentials go in `httpx.BasicAuth` on a dedicated client, never in a URL, argv or log line; error messages are built from `base_url`.
+  The existing GitHub client (`ctx.http`) must not receive these credentials, so the WebDAV client is separate and created/closed in `cli.download_async` (`cli.py:60-69`).
+- `exists_size`: `PROPFIND` with `Depth: 0` and a `getcontentlength` body, parse the multistatus with `xml.etree.ElementTree`; 404 → `None`.
+  If a server rejects PROPFIND, fall back to `HEAD`.
+- `mkdirs`: `MKCOL` per path segment (`405` = already exists is fine, `409` means a parent is missing, so create parents top-down).
+- `write_text`: `PUT` with the body.
+- `write_stream`: `PUT` to `<name>.part` with an async-generator body and an explicit `Content-Length`, then `MOVE` to the final name with `Overwrite: T`, and `DELETE` the `.part` on failure.
+  The chunk iterator is the GitHub download stream, so the file is relayed without touching local disk and the progress `FileTracker` advances per chunk exactly as it does today.
+- `read(path, start, end)`: `GET` with `Range: bytes=start-end`; expect `206`; if the server answers `200` (no range support) slice the body or raise a clear error.
+  This is what makes seeking possible; the skip check stays size-based, so nothing else needs it yet.
+- `set_latest(tag)`: `write_text("_releases_/latest.txt", tag + "\n")`.
+- Redirects off by default in httpx, which is what we want for `PUT`; allow them only if a real server needs it.
+
+### Wiring
+
+- `assets.py`: `ensure_releases_dir`, `write_readme`, `download_asset`, `sync_release` take a `Store` instead of a `Path`.
+  `download_asset` does `store.exists_size` for the skip check, then `store.write_stream(path, response.aiter_bytes(), asset.size)`, wrapped so the tracker advances per chunk.
+  Exceptions caught in `sync_release` (`assets.py:135`) gain `WebdavError`; httpx errors from the WebDAV side are `httpx.HTTPError` already.
+- `sync.py`: `Context.repo_dir: Path` (line 31) becomes `store_for(name)`/a `Store` factory.
+  `sync_releases` (line 161) builds `store.sub(name)` and calls `set_latest(listing.latest_tag)` instead of `link_latest`.
+  `sync_repo` (line 194) skips the `Dl.repo` step for a non-local store with `logger.warning`, and the steps count (line 196) must follow.
+  `local_repo_names` (line 52, offline fallback) is local-only: with a webdav dir the fallback has no checkouts to list, so it returns `[]` and logs that.
+- `cli.py:99-108`: add a branch next to the smb one: `webdav.has_protocol(repo_dir)` → `webdav.parse`, else the existing smb/local path.
+  Update the `--repo-dir` help (`cli.py:89`) and `README.md:31` (scheme, `%`-escaping of user/password, releases only, `latest.txt`).
 
 ## Tests
 
-New `tests/test_webdav.py`, modelled on `tests/test_smb.py`:
+New `tests/test_webdav.py` using `respx` (already a dev dependency) to fake the server:
 
-- `has_protocol` for `Path("webdavs://…")`, the string form, `webdav://`, and a non-match.
-- `parse` unescapes `user:escaped%20password` into `escaped password`, handles a port, an empty path, and `@` / `:` encoded in the password.
-- Invalid inputs (`webdavs://`, `webdavs:///path`) raise `WebdavError`.
-- `url` contains no credentials.
-- Mount flow with monkeypatched `subprocess.run`, `mounted_volumes` and `time.sleep`: stdin gets `user\npassword\n`, argv contains no password, second call is skipped when already mounted, timeout raises.
+- `has_protocol` / `parse`: unescaping `escaped%20password`, `%40` and `%3A` in credentials, port, empty path, invalid input; `base_url` has no credentials.
+- `WebdavStore` against respx routes: PROPFIND size parsing and 404, MKCOL parent ordering and 405 tolerance, the `.part` PUT then MOVE sequence, `.part` DELETE on a failing source stream, ranged `read` (206 and the 200 fallback), `Authorization: Basic` header present.
+- `download_asset` with a `WebdavStore`: skips when the size matches, uploads otherwise.
+
+Existing `tests/` for assets/sync keep passing through `LocalStore`; adjust them for the new signatures.
 
 ## Verification
 
-- `pytest tests/test_webdav.py tests/test_smb.py`.
-- Manual: `craft_dl download --repo-dir 'webdavs://user:pass%20word@host/some/path'` against a real server, confirm the mount appears, the run uses it, and the password is absent from the log and `ps`.
-- Note: unlike smb, nothing unmounts afterwards; keep that consistent for now (unmount is not part of this request).
+- `pytest`.
+- Manual against a real server: `craft_dl download --repo-dir 'webdavs://user:pass%20word@host/some/path'`, confirm `_releases_/<tag>/` files and `latest.txt` appear, a second run skips them, git is skipped with a warning, and the password is absent from logs.

@@ -14,9 +14,11 @@ from craft_dl.filtering import CliMode, matching_selectors, missing_releases, se
 from craft_dl.github import ORG, ReleaseSource
 from craft_dl.models import Dl, ReleaseInfo
 from craft_dl.progress import Bars
-from craft_dl.releases import CONCURRENT_DOWNLOADS, ensure_releases_dir, link_latest, sync_release
+from craft_dl.releases import CONCURRENT_DOWNLOADS, ensure_releases_dir, sync_release
 from craft_dl.report import ErrorCollector
 from craft_dl.selection import resolve_apps
+from craft_dl.store import LocalStore, Store
+from craft_dl.webdav import WebdavError
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,12 @@ class Context:
     semaphore: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(CONCURRENT_DOWNLOADS))
     selectors: dict[str, list[Selector]] = field(default_factory=dict)
     cli_mode: CliMode = CliMode.both
+    download_dir: Path | Store | None = None  # where the releases go, `repo_dir` if unset
+
+    def store_for(self, name: str) -> Store:
+        target = self.repo_dir if self.download_dir is None else self.download_dir
+        return LocalStore(target / name) if isinstance(target, Path) else target.sub(name)
+    # end def
 # end class
 
 
@@ -159,17 +167,19 @@ def filter_releases(name: str, listing: Listing, ctx: Context) -> list[ReleaseIn
 
 
 async def sync_releases(name: str, ctx: Context) -> None:
-    root: Path | None = None
+    store = ctx.store_for(name)
+    ready = False
     try:
-        root = ensure_releases_dir(ctx.repo_dir / name)
-    except OSError as error:
+        await ensure_releases_dir(store)
+        ready = True
+    except (OSError, WebdavError, httpx.HTTPError) as error:
         ctx.errors.add(name, Dl.release, "_releases_ setup", error)
     # end try
     ctx.bars.work_done()
-    if root is not None:
-        logger.info("%s: saving releases into %s", name, root)
+    if ready:
+        logger.info("%s: saving releases into %s", name, store.location)
     # end if
-    if ctx.source is None or ctx.http is None or root is None:
+    if ctx.source is None or ctx.http is None or not ready:
         ctx.bars.work_done()
         return
     # end if
@@ -178,14 +188,14 @@ async def sync_releases(name: str, ctx: Context) -> None:
     logger.info("%s: %d of %d release(s) selected", name, len(releases), len(listing.releases))
     ctx.bars.work_done()
     await asyncio.gather(*(
-        sync_release(name, release, root, ctx.http, ctx.errors, ctx.semaphore, ctx.bars.add_work, ctx.bars.work_done, ctx.bars.file)
+        sync_release(name, release, store, ctx.http, ctx.errors, ctx.semaphore, ctx.bars.add_work, ctx.bars.work_done, ctx.bars.file)
         for release in releases
     ))
     if listing.latest_tag is not None:
         try:
-            link_latest(root, listing.latest_tag)
-        except (OSError, ValueError) as error:
-            ctx.errors.add(name, Dl.release, "latest symlink", error)
+            await store.set_latest(listing.latest_tag)
+        except (OSError, ValueError, WebdavError, httpx.HTTPError) as error:
+            ctx.errors.add(name, Dl.release, "latest link", error)
         # end try
     # end if
 # end def
