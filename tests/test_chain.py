@@ -99,3 +99,19 @@ def test_dir_args_keep_the_locations_as_typed() -> None:
     tokens = ["--repo-dir", "smb://srv/share/x", "--app=a", "--download-dir=webdavs://u:p%20w@h/p"]
     assert dir_args(tokens) == ["--repo-dir=smb://srv/share/x", "--download-dir=webdavs://u:p%20w@h/p"]
     assert dir_args(["--app=a"]) == []
+
+
+def test_download_command_runs_end_to_end_with_the_retry_dirs(monkeypatch, capsys, tmp_path) -> None:
+    from craft_dl import cli
+
+    async def no_token(_: str | None) -> None:
+        return None
+
+    async def no_run(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(cli, "resolve_token", no_token)
+    monkeypatch.setattr(cli, "run", no_run)
+    tokens = ["download", "--dl=release", f"--download-dir={tmp_path}"]
+    assert cli.download(dl=["release"], download_dir=tmp_path, tokens=tokens) == 0
+    assert "All done" in capsys.readouterr().out

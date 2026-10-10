@@ -78,7 +78,7 @@ def parse_filters(tokens: Sequence[str], dl_cli: str) -> tuple[list[Selector], C
 
 async def download_async(
     dl: set[Dl], chain: list[Selector], cli_mode: CliMode, repo_dir: Path, download_dir: Path | webdav.WebdavLocation | None,
-    github_token: str | None, console: Console,
+    github_token: str | None, console: Console, retry_args: Sequence[str] = (),
 ) -> int:
     errors = ErrorCollector()
     logger.info("Resolving the GitHub token (--github-token, gh auth token, $GITHUB_TOKEN)…")

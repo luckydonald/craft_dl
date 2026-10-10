@@ -283,3 +283,5 @@ git clone: remote: Enumerating objects: 303072, done.
 
 ❯ Fix [@`ai/errors/1.txt`](./errors/1.txt)
 
+❯ `TypeError: download_async() takes 7 positional arguments but 8 were given`
+
