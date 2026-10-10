@@ -281,3 +281,5 @@ git clone: remote: Enumerating objects: 303072, done.
 
 ❯ The `Retry just the failed parts with:` should keep download and git location as originally specified.
 
+❯ Fix [@`ai/errors/1.txt`](./errors/1.txt)
+

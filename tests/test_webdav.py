@@ -85,7 +85,7 @@ async def test_mkdirs_goes_top_down_tolerates_existing_and_caches() -> None:
         await store.mkdirs("_releases_/v2")
     # end with
     assert [str(call.request.url) for call in route.calls] == [
-        "https://dav.example.com/some", BASE, f"{BASE}/_releases_", f"{BASE}/_releases_/v1", f"{BASE}/_releases_/v2",
+        "https://dav.example.com/some/", f"{BASE}/", f"{BASE}/_releases_/", f"{BASE}/_releases_/v1/", f"{BASE}/_releases_/v2/",
     ]
 
 
@@ -167,4 +167,13 @@ async def test_download_asset_skips_matching_size_and_uploads_otherwise() -> Non
         assert put.calls[0].request.content == b"abc"
         stat.mock(return_value=multistatus(3))
         assert await download_asset(client, asset, store, "r") is False
+    # end with
+
+
+@respx.mock
+async def test_stat_retries_a_collection_with_its_slash() -> None:
+    respx.route(method="PROPFIND", url=f"{BASE}/d").mock(return_value=httpx.Response(301, headers={"Location": f"{BASE}/d/"}))
+    respx.route(method="PROPFIND", url=f"{BASE}/d/").mock(return_value=multistatus(None))
+    async with httpx.AsyncClient() as client:
+        assert await WebdavStore(BASE, client).stat("d") == (True, None)
     # end with

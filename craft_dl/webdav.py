@@ -103,6 +103,11 @@ class WebdavStore:
     async def stat(self, path: str = "") -> tuple[bool, int | None]:
         """`(exists, size)`, where the size is `None` for collections."""
         response = await self.request("PROPFIND", path, headers={"Depth": "0", "Content-Type": "application/xml"}, content=PROPFIND_BODY)
+        if response.is_redirect and response.headers.get("Location", "").endswith("/"):  # a collection asked for without its slash
+            response = await self.client.request(
+                "PROPFIND", self.url(path) + "/", headers={"Depth": "0", "Content-Type": "application/xml"}, content=PROPFIND_BODY,
+            )
+        # end if
         if response.status_code == 404:
             return False, None
         # end if
@@ -144,7 +149,7 @@ class WebdavStore:
             if url in self.known_dirs:
                 continue
             # end if
-            response = await self.client.request("MKCOL", url)
+            response = await self.client.request("MKCOL", url + "/")  # collections want the slash, else some servers answer 301
             if response.status_code != 405 and not (index < base_count and response.status_code == 403):
                 response.raise_for_status()
             # end if

@@ -1,0 +1,10 @@
+➜ uv run craft_dl download '--download-dir=webdavs://uXXXXXX-subNNN:password%20here@uXXXXXX-subNNN.your-storagebox.de/' --dl=release --app=lightcraft --release=latest
+…
+INFO     1 repository selected: lightcraft
+INFO     lightcraft: starting (release)
+INFO     HTTP Request: MKCOL https://uXXXXXX-subNNN.your-storagebox.de/lightcraft "HTTP/1.1 301 Moved Permanently"
+all repositories             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:01 0:00:00
+lightcraft                   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00 0:00:00
+1 error(s):
+  - lightcraft [_releases_ setup]: HTTPStatusError: Redirect response '301 Moved Permanently' for url 'https://uXXXXXX-subNNN.your-storagebox.de/lightcraft'
+Redirect location: 'https://uXXXXXX-subNNN.your-storagebox.de/lightcraft/'
