@@ -219,3 +219,52 @@ git clone: remote: Enumerating objects: 303072, done.
   3. compressing (percentage is known because `(XXX/YYY)`) = `[2/4 - 3/4)` of middle bar
   4. and the last part we already parse for the current progress bar. Download? (percentage is known because `(XXX/YYY)`) = `[3/4 - 4/4]` of middle bar
 
+❯ support `webdavs://user:escaped%20password@domain.example.com/some/path` as data dir, too.
+
+❯ Task Notification:
+> - Task `a3967c896d6b8657e` <kbd>completed</kbd>
+> - Tool `toolu_01Nd1uiVWFTFJqngQ68vZivi`
+> - > Agent "Explore data dir handling" finished
+> - [Query (`654` chars, `654 B`)](output/agents/014.a3967c896d6b8657e/prompt.md)
+> - [Answer (`6190` chars, `6.05 KB`)](output/agents/014.a3967c896d6b8657e/result.md)
+> - [Raw log (`152162` chars, `149 KB`)](/private/tmp/claude-501/-Users-user-Documents-programming-Python-craft-dl/d4fbe3b2-a426-44c7-b0b3-08d1c4a9a36c/tasks/a3967c896d6b8657e.output)
+> - `3` tools, `27048` tokens, `0.4681 s`
+
+❯ Plan denied:
+> No, don't use any mounts, but read/write to that directly. Notice that it will allow range requests, so seek is possible. Stay async.
+>
+> Note: The user's next message may contain a correction or preference. Pay close attention — if they explain what went wrong or how they'd prefer you to work, consider saving that to memory for future sessions.
+
+❯ Question answered.
+> <details><summary>
+>
+>> 1. git clone/fetch needs a real filesystem and can't run against WebDAV. How should a webdavs:// data dir treat the git repos?
+>> 2. WebDAV has no symlinks, so `_releases_/latest` can't be a link. What should replace it?
+>
+> (click to expand)
+>
+> </summary>
+>
+>> **Git part** (1/2) <kbd>Single Select</kbd><br>
+>> git clone/fetch needs a real filesystem and can't run against WebDAV. How should a webdavs:// data dir treat the git repos?
+> - [x] 1\. Releases only (Recommended)
+>   - _WebDAV holds only <repo>/_releases_/…; git sync (--dl repo) is skipped with a warning for webdavs:// dirs._
+> - [ ] 2\. Error out if repo included
+>   - _Refuse to start when a webdavs:// dir is combined with the repo download._
+> - [ ] 3\. Local git cache + upload
+>   - _Keep bare clones locally and PUT them to WebDAV — large and slow; likely overkill._
+> - [ ] 4\. _Type something._
+>
+>> **latest link** (2/2) <kbd>Single Select</kbd><br>
+>> WebDAV has no symlinks, so `_releases_/latest` can't be a link. What should replace it?
+> - [ ] 1\. Skip it (Recommended)
+>   - _Log that `latest` is unsupported on webdavs:// and write nothing._
+> - [x] 2\. latest.txt file
+>   - _Write a small `latest.txt` containing the tag name._
+> - [ ] 3\. Copy of the folder
+>   - _COPY the release collection to `latest/` server-side (WebDAV COPY), replacing the old one._
+> - [ ] 4\. _Type something._
+>
+> </details>
+>
+
