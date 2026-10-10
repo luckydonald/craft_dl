@@ -91,3 +91,11 @@ def test_wildcards_lift_the_restriction_of_their_level() -> None:
     assert parse_chain("--app=a --release=1 --release=* --variant=x".split())[-1] == Selector(("a",), (), (), ("x",))
     assert parse_chain("--app=a --platform=win --variant=msi --variant=ALL".split())[-1] == Selector(("a",), (), ("windows",), ())
     assert parse_chain("--app=a --platform=win,all".split()) == [Selector(("a",), (), (), ())]
+
+
+def test_dir_args_keep_the_locations_as_typed() -> None:
+    from craft_dl.cli import dir_args
+
+    tokens = ["--repo-dir", "smb://srv/share/x", "--app=a", "--download-dir=webdavs://u:p%20w@h/p"]
+    assert dir_args(tokens) == ["--repo-dir=smb://srv/share/x", "--download-dir=webdavs://u:p%20w@h/p"]
+    assert dir_args(["--app=a"]) == []

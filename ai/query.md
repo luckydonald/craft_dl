@@ -279,3 +279,5 @@ git clone: remote: Enumerating objects: 303072, done.
 
 ❯ Separate download and repo dir
 
+❯ The `Retry just the failed parts with:` should keep download and git location as originally specified.
+

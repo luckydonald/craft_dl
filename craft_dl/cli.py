@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import shlex
 import sys
 from collections.abc import Sequence
 from contextlib import AsyncExitStack
@@ -42,6 +43,23 @@ def parse_dl(values: list[str]) -> set[Dl]:
 # end def
 
 
+def dir_args(tokens: Sequence[str]) -> list[str]:
+    """`--repo-dir`/`--download-dir` exactly as typed (a `Path` would collapse `smb://` and `webdavs://`), for the retry commands."""
+    found: dict[str, str] = {}
+    for index, token in enumerate(tokens):
+        name, equals, value = token.partition("=")
+        if name not in ("--repo-dir", "--download-dir"):
+            continue
+        # end if
+        if not equals and index + 1 < len(tokens):
+            value = tokens[index + 1]
+        # end if
+        found[name] = value
+    # end for
+    return [f"{name}={shlex.quote(value)}" for name, value in found.items()]
+# end def
+
+
 def setup_logging() -> Console:
     console = Console(stderr=True)
     logging.basicConfig(level=logging.INFO, format="%(message)s", handlers=[RichHandler(console=console, show_path=False)])
@@ -81,7 +99,7 @@ async def download_async(
             # end with
         # end with
     # end async with
-    extra_args = [] if cli_mode is CliMode.both else [f"--dl-cli={cli_mode.value}"]
+    extra_args = [*retry_args, *([] if cli_mode is CliMode.both else [f"--dl-cli={cli_mode.value}"])]
     print(errors.render(ctx.selectors, extra_args))
     return 1 if errors.failures else 0
 # end def
@@ -130,12 +148,13 @@ def download(
     `--app`, `--release`, `--platform` and `--variant` form a chain in this order of scope: a new option keeps the levels above it and resets the ones below,
     e.g. `--app=art --release=latest --platform=win --variant=msi --platform=mac --app=photo --variant=dmg`.
     """
-    chain, cli_mode = parse_filters(sys.argv[1:] if tokens is None else tokens, dl_cli)
+    arguments = sys.argv[1:] if tokens is None else tokens
+    chain, cli_mode = parse_filters(arguments, dl_cli)
     console = setup_logging()
     local_repo_dir = resolve_dir(repo_dir, "--repo-dir", allow_webdav=False)
     assert isinstance(local_repo_dir, Path)
     target = None if download_dir is None else resolve_dir(download_dir, "--download-dir", allow_webdav=True)
-    return asyncio.run(download_async(parse_dl(dl), chain, cli_mode, local_repo_dir, target, github_token, console))
+    return asyncio.run(download_async(parse_dl(dl), chain, cli_mode, local_repo_dir, target, github_token, console, dir_args(arguments)))
 # end def
 
 
